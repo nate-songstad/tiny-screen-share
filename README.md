@@ -8,7 +8,7 @@ A deliberately tiny one-to-one screen sharing app.
 - No microphone
 - Host clicks **Share my screen** and gets a 6-digit code + link
 - Viewer enters the code or opens the link
-- The viewer's screen fills the browser window by default, with only status and Leave controls; flipping automatically switches between viewing and sharing layouts
+- The viewer uses the entire browser window, with floating status and Leave controls. Video is shown at the largest size that preserves its proportions without cropping. Different screen shapes may leave bars on two edges; flipping automatically switches between viewing and sharing layouts.
 - The current sharer can request a flip; the viewer accepts and takes over without leaving the room
 - Pause hides the screen from the viewer and disables outgoing video frames; resume continues in the same room
 - Video is sent browser-to-browser with WebRTC

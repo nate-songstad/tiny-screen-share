@@ -270,9 +270,12 @@ test('desktop and mobile layouts, keyboard focus, clipboard fallback, and screen
     const layout = await viewer.evaluate(() => {
       const session = document.querySelector('#session').getBoundingClientRect();
       const stage = document.querySelector('.screen-stage').getBoundingClientRect();
+      const video = document.querySelector('#remoteVideo');
       const leave = document.querySelector('#leaveBtn').getBoundingClientRect();
       return { x: session.x, y: session.y, width: session.width, height: session.height,
         stageWidth: stage.width, stageHeight: stage.height, leaveBottom: leave.bottom,
+        videoWidth: video.getBoundingClientRect().width, videoHeight: video.getBoundingClientRect().height,
+        videoFit: getComputedStyle(video).objectFit,
         viewportWidth: innerWidth, viewportHeight: innerHeight,
         scrollHeight: document.documentElement.scrollHeight };
     });
@@ -281,7 +284,10 @@ test('desktop and mobile layouts, keyboard focus, clipboard fallback, and screen
     expect(layout.width).toBe(layout.viewportWidth);
     expect(layout.height).toBe(layout.viewportHeight);
     expect(layout.stageWidth).toBe(layout.viewportWidth);
-    expect(layout.stageHeight).toBeGreaterThan(layout.viewportHeight - 80);
+    expect(layout.stageHeight).toBe(layout.viewportHeight);
+    expect(layout.videoWidth).toBe(layout.viewportWidth);
+    expect(layout.videoHeight).toBe(layout.viewportHeight);
+    expect(layout.videoFit).toBe('contain');
     expect(layout.leaveBottom).toBeLessThanOrEqual(layout.viewportHeight);
     expect(layout.scrollHeight).toBe(layout.viewportHeight);
   }
