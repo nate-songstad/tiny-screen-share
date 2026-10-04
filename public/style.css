@@ -8,6 +8,7 @@
 body { margin: 0; min-height: 100vh; }
 button, input { font: inherit; }
 button { cursor: pointer; }
+button:disabled { cursor: default; opacity: .55; }
 
 .shell {
   min-height: 100vh;
@@ -40,6 +41,9 @@ h1 { margin: 0 0 8px; font-size: 30px; }
 .danger { margin-top: 28px; width: 100%; background: #111; color: #fff; }
 .small { min-height: 42px; }
 
+.host-actions { display: flex; gap: 10px; margin-top: 28px; }
+.host-actions button { flex: 1; margin-top: 0; }
+
 .divider { display: flex; align-items: center; gap: 12px; color: #999; margin: 22px 0; }
 .divider::before, .divider::after { content: ""; height: 1px; background: #e6e6e6; flex: 1; }
 
@@ -69,6 +73,9 @@ input:focus { border-color: #999; }
   gap: 12px;
 }
 .viewer-bar { background: #fff; border: 1px solid #e3e3e3; border-radius: 12px; padding: 12px 14px; }
+.flip-prompt { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 12px; padding-top: 12px; border-top: 1px solid #e6e6e6; }
+.flip-prompt-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.flip-prompt .primary { width: auto; }
 video {
   width: 100%;
   flex: 1;
@@ -85,5 +92,7 @@ video {
   .shell { padding: 14px; }
   .card { padding: 24px; }
   .join-form, .link-row { flex-direction: column; }
+  .flip-prompt { align-items: stretch; flex-direction: column; }
+  .flip-prompt-actions button { flex: 1; }
   .code { font-size: 34px; }
 }

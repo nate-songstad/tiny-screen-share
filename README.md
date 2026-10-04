@@ -8,6 +8,7 @@ A deliberately tiny one-to-one screen sharing app.
 - No microphone
 - Host clicks **Start Sharing** and gets a 6-digit code + link
 - Viewer enters the code or opens the link
+- The current sharer can request a flip; the viewer accepts and takes over without leaving the room
 - Video is sent browser-to-browser with WebRTC
 - The Node server only serves the page and relays WebRTC signaling messages
 

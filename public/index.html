@@ -35,12 +35,22 @@
         <button id="copyBtn" class="secondary small">Copy</button>
       </div>
 
-      <button id="stopBtn" class="danger">Stop Sharing</button>
+      <div class="host-actions">
+        <button id="flipBtn" class="secondary" disabled>Flip</button>
+        <button id="stopBtn" class="danger">Stop Sharing</button>
+      </div>
     </section>
 
     <section id="viewer" class="viewer hidden">
       <div class="viewer-bar">
         <div class="status"><span class="dot"></span><span id="viewerStatus">Connecting…</span></div>
+        <div id="flipPrompt" class="flip-prompt hidden">
+          <span>The sharer wants to give you the floor.</span>
+          <div class="flip-prompt-actions">
+            <button id="declineFlipBtn" class="secondary small">Not now</button>
+            <button id="acceptFlipBtn" class="primary small">Accept &amp; share</button>
+          </div>
+        </div>
       </div>
       <video id="remoteVideo" autoplay playsinline muted></video>
       <p id="viewerError" class="error hidden"></p>
