@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Screen Share</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main class="shell">
+    <section id="home" class="card">
+      <h1>Screen Share</h1>
+      <p class="sub">No meeting. No camera. No mic. Just your screen.</p>
+
+      <button id="startBtn" class="primary">Start Sharing</button>
+
+      <div class="divider"><span>or</span></div>
+
+      <form id="joinForm" class="join-form">
+        <input id="codeInput" inputmode="numeric" maxlength="6" placeholder="6-digit code" autocomplete="off" />
+        <button type="submit" class="secondary">Join</button>
+      </form>
+
+      <p id="homeError" class="error hidden"></p>
+    </section>
+
+    <section id="host" class="card hidden">
+      <div class="status"><span class="dot"></span><span id="hostStatus">Sharing your screen</span></div>
+      <p class="label">Share code</p>
+      <div id="roomCode" class="code">------</div>
+
+      <p class="label">Share link</p>
+      <div class="link-row">
+        <input id="shareLink" readonly />
+        <button id="copyBtn" class="secondary small">Copy</button>
+      </div>
+
+      <button id="stopBtn" class="danger">Stop Sharing</button>
+    </section>
+
+    <section id="viewer" class="viewer hidden">
+      <div class="viewer-bar">
+        <div class="status"><span class="dot"></span><span id="viewerStatus">Connecting…</span></div>
+      </div>
+      <video id="remoteVideo" autoplay playsinline muted></video>
+      <p id="viewerError" class="error hidden"></p>
+    </section>
+  </main>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
