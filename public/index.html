@@ -3,60 +3,75 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Screen Share</title>
-  <link rel="stylesheet" href="/style.css" />
+  <meta name="theme-color" content="#f5f6f4" />
+  <title>Screenpeek — just your screen</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='5' width='26' height='19' rx='5' fill='%23213932'/%3E%3Cpath d='M11 28h10' stroke='%23213932' stroke-width='3'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/style.css?v=3" />
 </head>
 <body>
-  <main class="shell">
-    <section id="home" class="card">
-      <h1>Screen Share</h1>
-      <p class="sub">No meeting. No camera. No mic. Just your screen.</p>
-
-      <button id="startBtn" class="primary">Start Sharing</button>
-
-      <div class="divider"><span>or</span></div>
-
-      <form id="joinForm" class="join-form">
-        <input id="codeInput" inputmode="numeric" maxlength="6" placeholder="6-digit code" autocomplete="off" />
-        <button type="submit" class="secondary">Join</button>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Screenpeek home"><span class="brand-icon" aria-hidden="true"></span>screenpeek<span class="brand-period">.</span></a>
+    <span class="privacy-note">No camera. No mic. Just your screen.</span>
+  </header>
+  <main>
+    <div id="message" class="message hidden" role="status" aria-live="polite"></div>
+    <section id="home" class="home card" aria-labelledby="homeTitle">
+      <div class="eyebrow">A little less meeting</div>
+      <h1 id="homeTitle">Let me show you.</h1>
+      <p class="intro">One screen. Two people.<br />Share a link and get straight to it.</p>
+      <button id="startBtn" class="primary wide">Share my screen <span aria-hidden="true">↗</span></button>
+      <p class="helper centered">Choose a tab, window, or your entire screen.</p>
+      <div class="divider"><span>or join someone</span></div>
+      <form id="joinForm">
+        <label for="codeInput">Six-digit share code</label>
+        <div class="input-row">
+          <input id="codeInput" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000 000" autocomplete="off" required />
+          <button id="joinBtn" class="secondary" type="submit">Join screenpeek <span aria-hidden="true">→</span></button>
+        </div>
       </form>
-
-      <p id="homeError" class="error hidden"></p>
+      <p class="home-footer"><span class="tiny-dot" aria-hidden="true"></span> No account or download needed</p>
     </section>
 
-    <section id="host" class="card hidden">
-      <div class="status"><span class="dot"></span><span id="hostStatus">Sharing your screen</span></div>
-      <p class="label">Share code</p>
-      <div id="roomCode" class="code">------</div>
-
-      <p class="label">Share link</p>
-      <div class="link-row">
-        <input id="shareLink" readonly />
-        <button id="copyBtn" class="secondary small">Copy</button>
+    <section id="session" class="session card hidden" aria-label="Your screenpeek">
+      <div class="session-heading">
+        <div><div id="roleLabel" class="eyebrow">Your screenpeek</div><h1 id="sessionTitle">Sharing your screen</h1></div>
+        <div id="statusBadge" class="status-badge" data-tone="waiting"><span class="tiny-dot" aria-hidden="true"></span><span id="sessionStatus" role="status">Connecting…</span></div>
       </div>
 
-      <div class="host-actions">
-        <button id="flipBtn" class="secondary" disabled>Flip</button>
-        <button id="stopBtn" class="danger">Stop Sharing</button>
+      <div id="invitePanel" class="invite-panel">
+        <div><label for="roomCode">Share code</label><output id="roomCode" class="room-code">------</output></div>
+        <div class="link-group"><label for="shareLink">Or send this link</label><div class="input-row"><input id="shareLink" readonly /><button id="copyBtn" class="secondary">Copy link</button></div></div>
       </div>
-    </section>
 
-    <section id="viewer" class="viewer hidden">
-      <div class="viewer-bar">
-        <div class="status"><span class="dot"></span><span id="viewerStatus">Connecting…</span></div>
-        <div id="flipPrompt" class="flip-prompt hidden">
-          <span>The sharer wants to give you the floor.</span>
-          <div class="flip-prompt-actions">
-            <button id="declineFlipBtn" class="secondary small">Not now</button>
-            <button id="acceptFlipBtn" class="primary small">Accept &amp; share</button>
-          </div>
+      <div id="flipPrompt" class="flip-prompt hidden" role="region" aria-label="Flip request">
+        <div><strong id="flipTitle">Your turn to share?</strong><p id="flipDescription">Choose what to share. Their screen stays live until you accept.</p></div>
+        <div class="prompt-actions"><button id="declineFlipBtn" class="secondary">Not now</button><button id="acceptFlipBtn" class="primary">Accept &amp; share</button><button id="cancelFlipBtn" class="secondary hidden">Cancel request</button></div>
+      </div>
+
+      <div class="screen-stage">
+        <video id="localVideo" class="hidden" autoplay playsinline muted aria-label="Preview of your shared screen"></video>
+        <video id="remoteVideo" class="hidden" autoplay playsinline muted aria-label="Shared screen"></video>
+        <div id="stageOverlay" class="stage-overlay">
+          <span class="screen-symbol" aria-hidden="true"></span>
+          <h2 id="stageTitle">Ready when you are</h2>
+          <p id="stageDescription">Your screen will appear here.</p>
+          <button id="resumeBtn" class="primary hidden">Resume sharing</button>
+          <button id="retryBtn" class="secondary hidden">Retry connection</button>
+        </div>
+        <span id="previewLabel" class="preview-label hidden">Your screen · live preview</span>
+      </div>
+
+      <div class="toolbar">
+        <p id="sessionHint" class="helper">Your room stays open while you switch screens.</p>
+        <div class="toolbar-actions">
+          <button id="pauseBtn" class="secondary">Pause</button>
+          <button id="flipBtn" class="secondary" title="Invite the other person to share their screen">Flip <span aria-hidden="true">⇄</span></button>
+          <button id="leaveBtn" class="danger">End screenpeek</button>
         </div>
       </div>
-      <video id="remoteVideo" autoplay playsinline muted></video>
-      <p id="viewerError" class="error hidden"></p>
     </section>
+    <p class="page-footer">A shared view. A simpler conversation.</p>
   </main>
-
-  <script type="module" src="/app.js"></script>
+  <script type="module" src="/app.js?v=3"></script>
 </body>
 </html>
