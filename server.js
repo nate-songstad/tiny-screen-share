@@ -26,7 +26,8 @@ function snapshot(room, member) {
     type: 'state', code: room.code, role: room.sharer === member.token ? 'sharer' : 'viewer',
     epoch: room.epoch, ready: room.ready, paused: room.paused,
     partner: other ? (other.ws ? 'online' : 'reconnecting') : 'absent',
-    sharerOnline: Boolean(sharer?.ws), flipId: room.flip?.id || null
+    sharerOnline: Boolean(sharer?.ws), flipId: room.flip?.id || null,
+    laser: room.laser, laserId: room.laserId
   };
 }
 
@@ -97,7 +98,7 @@ wss.on('connection', (ws) => {
         do { code = String(randomInt(100000, 1000000)); } while (rooms.has(code));
         const member = { token: randomUUID(), ws: null, timer: null };
         const room = { code, members: new Map([[member.token, member]]), sharer: member.token,
-          epoch: 0, ready: true, paused: false, flip: null };
+          epoch: 0, ready: true, paused: false, flip: null, laser: false, laserId: null };
         rooms.set(code, room);
         attach(room, member, ws);
         return;
@@ -111,6 +112,8 @@ wss.on('connection', (ws) => {
         if (room.sharer === member.token) {
           room.ready = msg.hasStream === true;
           room.paused = room.ready && msg.paused === true;
+          // The floating laser window survives a dropped socket, but not a refresh.
+          room.laser = room.ready && msg.laser === true;
         }
         attach(room, member, ws);
       } else {
@@ -147,6 +150,7 @@ wss.on('connection', (ws) => {
         if (!isSharer || !room.ready) return;
         room.ready = false;
         room.paused = false;
+        room.laser = false;
         cancelFlip(room);
         room.epoch++;
         broadcast(room);
@@ -154,6 +158,13 @@ wss.on('connection', (ws) => {
       case 'pause':
         if (!isSharer || !room.ready || typeof msg.paused !== 'boolean') return;
         room.paused = msg.paused;
+        broadcast(room);
+        break;
+      case 'laser':
+        // Always answer, so the sharer can tell a refusal from an older broadcast.
+        if (!isSharer || typeof msg.on !== 'boolean') return;
+        room.laser = msg.on && room.ready;
+        room.laserId = Number.isSafeInteger(msg.id) ? msg.id : null;
         broadcast(room);
         break;
       case 'request-flip':
@@ -181,6 +192,7 @@ wss.on('connection', (ws) => {
         room.sharer = member.token;
         room.ready = true;
         room.paused = false;
+        room.laser = false;
         room.epoch++;
         broadcast(room);
         break;

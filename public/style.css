@@ -77,6 +77,15 @@ video { width: 100%; height: 100%; min-height: 0; object-fit: contain; position:
 .stage-overlay button { margin-top: 20px; }
 .stage-overlay .primary { background: #d5e5c9; color: #213828; }
 .stage-overlay .primary:hover:not(:disabled) { background: #e6f0de; }
+/* Sits above the video; only catches the pointer while the viewer is pointing. */
+.laser-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.laser-canvas.pointing { pointer-events: auto; cursor: none; touch-action: none; }
+.laser-btn { display: inline-flex; align-items: center; gap: 8px; }
+.laser-dot { width: 8px; height: 8px; border-radius: 50%; background: #c9a8a2; flex-shrink: 0; }
+.laser-btn[aria-pressed="true"] { background: #fff1ef; border-color: #e7b4ab; color: #9c2f22; }
+.laser-btn[aria-pressed="true"] .laser-dot { background: #ff2d2d; box-shadow: 0 0 0 3px #ff2d2d33, 0 0 8px #ff2d2d; }
+.laser-btn.invite { animation: laser-invite 1.4s ease-out 2; }
+@keyframes laser-invite { 0% { box-shadow: 0 0 0 0 #ff4a3d88; } 100% { box-shadow: 0 0 0 12px #ff4a3d00; } }
 .preview-label { position: absolute; left: 12px; bottom: 12px; color: #fff; background: #15241ed9; font-size: 10px; border: 1px solid #ffffff26; border-radius: 5px; padding: 6px 9px; pointer-events: none; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding-top: 20px; }
 .toolbar .helper { margin: 0; max-width: 285px; }
@@ -102,6 +111,7 @@ video { width: 100%; height: 100%; min-height: 0; object-fit: contain; position:
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; }
+  .laser-btn.invite { animation: none; }
 }
 @media (max-width: 400px) {
   #joinForm .input-row { flex-direction: column; }
@@ -162,6 +172,11 @@ body.is-viewer { overflow: hidden; background: #17211d; }
 }
 .is-viewer .toolbar .danger { color: #d5e0d7; border-color: #3e5145; background: #17211de6; }
 .is-viewer .toolbar .danger:hover { background: #283a2f; }
+.is-viewer .toolbar-actions { flex-wrap: nowrap; }
+.is-viewer .toolbar-actions button { flex: none; }
+.is-viewer .laser-btn { color: #d5e0d7; border-color: #3e5145; background: #17211de6; }
+.is-viewer .laser-btn:hover:not(:disabled) { background: #283a2f; border-color: #3e5145; }
+.is-viewer .laser-btn[aria-pressed="true"] { color: #ffd9d3; border-color: #a8473c; background: #3a1e1ae6; }
 .is-viewer .flip-prompt {
   position: absolute;
   z-index: 2;

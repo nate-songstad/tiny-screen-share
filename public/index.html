@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f5f6f4" />
   <title>Screenpeek — just your screen</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='5' width='26' height='19' rx='5' fill='%23213932'/%3E%3Cpath d='M11 28h10' stroke='%23213932' stroke-width='3'/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="/style.css?v=3" />
+  <link rel="stylesheet" href="/style.css?v=4" />
 </head>
 <body>
   <header class="site-header">
@@ -51,6 +51,7 @@
       <div class="screen-stage">
         <video id="localVideo" class="hidden" autoplay playsinline muted aria-label="Preview of your shared screen"></video>
         <video id="remoteVideo" class="hidden" autoplay playsinline muted aria-label="Shared screen"></video>
+        <canvas id="laserCanvas" class="laser-canvas" aria-hidden="true"></canvas>
         <div id="stageOverlay" class="stage-overlay">
           <span class="screen-symbol" aria-hidden="true"></span>
           <h2 id="stageTitle">Ready when you are</h2>
@@ -64,6 +65,7 @@
       <div class="toolbar">
         <p id="sessionHint" class="helper">Your room stays open while you switch screens.</p>
         <div class="toolbar-actions">
+          <button id="laserBtn" class="secondary laser-btn hidden" aria-pressed="false"><span class="laser-dot" aria-hidden="true"></span><span id="laserLabel">Laser pointer</span></button>
           <button id="pauseBtn" class="secondary">Pause</button>
           <button id="flipBtn" class="secondary" title="Invite the other person to share their screen">Flip <span aria-hidden="true">⇄</span></button>
           <button id="leaveBtn" class="danger">End screenpeek</button>
@@ -72,6 +74,6 @@
     </section>
     <p class="page-footer">A shared view. A simpler conversation.</p>
   </main>
-  <script type="module" src="/app.js?v=3"></script>
+  <script type="module" src="/app.js?v=4"></script>
 </body>
 </html>

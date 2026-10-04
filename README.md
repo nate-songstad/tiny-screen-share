@@ -11,6 +11,7 @@ A deliberately tiny one-to-one screen sharing app.
 - The viewer uses the entire browser window, with floating status and Leave controls. Video is shown at the largest size that preserves its proportions without cropping. Different screen shapes may leave bars on two edges; flipping automatically switches between viewing and sharing layouts.
 - The current sharer can request a flip; the viewer accepts and takes over without leaving the room
 - Pause hides the screen from the viewer and disables outgoing video frames; resume continues in the same room
+- Laser pointer: the sharer allows it, then the viewer can point at the shared screen (see below)
 - Video is sent browser-to-browser with WebRTC
 - The Node server only serves the page and relays WebRTC signaling messages
 
@@ -33,6 +34,7 @@ To test on one machine, start sharing in one browser window and open the generat
 - **Refresh:** viewers reconnect automatically. Sharers return to the same room and choose **Resume sharing** to grant screen-capture permission again. Role identity is stored per tab in session storage; the invitation link contains only the room code.
 - **Temporary disconnect:** the room reserves the participant's place for 30 seconds. The client attempts to reconnect for up to 20 seconds, then returns home with an explanation. A resumed live capture keeps its paused/unpaused state.
 - **Leave / end:** viewers may leave and another viewer can join. Ending from the current sharer ends the room for both people and stops capture. Using the browser's Stop Sharing control also ends the room.
+- **Laser pointer:** off by default. The sharer clicks **Laser pointer**, which allows it and opens a floating window (Document Picture-in-Picture) showing their screen with the laser on top, so they can see it while working in other apps. The viewer then chooses **Laser**: a red orb follows their pointer, and click-and-drag leaves a trail that fades within about 0.75 seconds, with a pulse on press. Positions go browser to browser over a WebRTC data channel, and the sharer's browser ignores them unless the laser is allowed. Clicking the button again, choosing **Turn off**, or closing the floating window turns it off for both people. Pausing suspends pointing; flipping or refreshing as the sharer turns it off. Browsers without Document Picture-in-Picture (Safari, Firefox) show the laser in the in-tab preview only. A web page cannot draw on top of other apps, so the floating window is the closest thing to an overlay without an installed app.
 - **Connection failure:** there is a bounded connection wait and a Retry connection action, rather than a permanently blank player.
 
 ## Tests
