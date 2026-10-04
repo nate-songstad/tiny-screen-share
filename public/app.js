@@ -80,6 +80,7 @@ function goHome(message = '', error = false) {
 }
 
 function render() {
+  document.body.classList.toggle('is-viewer', room?.role === 'viewer');
   visible(ui.home, !room);
   visible(ui.session, Boolean(room));
   ui.startBtn.disabled = busy || Boolean(captureJob);

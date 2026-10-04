@@ -75,6 +75,8 @@ async function live(host, viewer) {
   await expect(viewer.locator('#sessionStatus')).toHaveText('Live');
   await expect.poll(() => viewer.locator('#remoteVideo').evaluate((video) => video.getVideoPlaybackQuality().totalVideoFrames)).toBeGreaterThan(2);
   await expect(viewer.locator('#stageOverlay')).toBeHidden();
+  await expect(viewer.locator('body')).toHaveClass('is-viewer');
+  await expect(host.locator('body')).not.toHaveClass('is-viewer');
 }
 
 async function flip(host, viewer) {
@@ -254,6 +256,7 @@ test('desktop and mobile layouts, keyboard focus, clipboard fallback, and screen
   const errors = [];
   const { host, viewer } = await startPair(browser, errors);
   await host.screenshot({ path: testInfo.outputPath('sharing-desktop.png'), fullPage: true });
+  await viewer.screenshot({ path: testInfo.outputPath('viewer-desktop.png'), fullPage: true });
   await host.locator('#flipBtn').click();
   await viewer.screenshot({ path: testInfo.outputPath('flip-desktop.png'), fullPage: true });
   await host.setViewportSize({ width: 375, height: 812 });
@@ -264,6 +267,23 @@ test('desktop and mobile layouts, keyboard focus, clipboard fallback, and screen
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await expect(page.locator('#leaveBtn')).toBeVisible();
     }
+    const layout = await viewer.evaluate(() => {
+      const session = document.querySelector('#session').getBoundingClientRect();
+      const stage = document.querySelector('.screen-stage').getBoundingClientRect();
+      const leave = document.querySelector('#leaveBtn').getBoundingClientRect();
+      return { x: session.x, y: session.y, width: session.width, height: session.height,
+        stageWidth: stage.width, stageHeight: stage.height, leaveBottom: leave.bottom,
+        viewportWidth: innerWidth, viewportHeight: innerHeight,
+        scrollHeight: document.documentElement.scrollHeight };
+    });
+    expect(layout.x).toBe(0);
+    expect(layout.y).toBe(0);
+    expect(layout.width).toBe(layout.viewportWidth);
+    expect(layout.height).toBe(layout.viewportHeight);
+    expect(layout.stageWidth).toBe(layout.viewportWidth);
+    expect(layout.stageHeight).toBeGreaterThan(layout.viewportHeight - 80);
+    expect(layout.leaveBottom).toBeLessThanOrEqual(layout.viewportHeight);
+    expect(layout.scrollHeight).toBe(layout.viewportHeight);
   }
   await host.setViewportSize({ width: 375, height: 812 });
   await viewer.setViewportSize({ width: 375, height: 812 });
@@ -275,6 +295,7 @@ test('desktop and mobile layouts, keyboard focus, clipboard fallback, and screen
   await expect(host.locator('#shareLink')).toBeFocused();
   await expect(host.locator('#message')).toContainText('Copy the selected link');
   await host.locator('#leaveBtn').click();
+  await expect(viewer.locator('body')).not.toHaveClass('is-viewer');
   await host.screenshot({ path: testInfo.outputPath('home-mobile.png'), fullPage: true });
   expect(errors).toEqual([]);
 });
