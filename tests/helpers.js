@@ -4,7 +4,7 @@ import { expect } from '@playwright/test';
 // navigation and UI events all run in real Chromium browser contexts.
 export async function installCapture(page) {
   await page.addInitScript(() => {
-    window.captureTest = { streams: [], mode: 'success', sockets: [], channels: [] };
+    window.captureTest = { streams: [], mode: 'success', sockets: [], channels: [], peers: [] };
     const NativeSocket = window.WebSocket;
     window.WebSocket = class extends NativeSocket {
       constructor(...args) { super(...args); window.captureTest.sockets.push(this); }
@@ -14,6 +14,7 @@ export async function installCapture(page) {
     window.RTCPeerConnection = class extends NativePeer {
       constructor(...args) {
         super(...args);
+        window.captureTest.peers.push(this);
         this.addEventListener('datachannel', ({ channel }) => window.captureTest.channels.push(channel));
       }
       createDataChannel(...args) {

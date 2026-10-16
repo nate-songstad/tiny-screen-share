@@ -125,13 +125,10 @@ test('end during screen picker prevents later capture from starting a ghost shar
   expect(errors).toEqual([]);
 });
 
-test('viewer can leave and rejoin; third participant is rejected; sharer departure expires cleanly', async ({ browser }) => {
+test('viewer can leave and someone new can join; sharer departure expires cleanly', async ({ browser }) => {
   const errors = [];
   const { host, viewer, code } = await startPair(browser, errors);
   const third = await newPage(browser, errors);
-  await third.goto('/?room=' + code);
-  await expect(third.locator('#message')).toContainText('already has two people');
-  await expect(third.locator('#home')).toBeVisible();
   await viewer.getByRole('button', { name: 'Leave', exact: true }).click();
   await expect(host.locator('#sessionStatus')).toHaveText('Waiting for viewer');
   await expect(host.locator('#flipBtn')).toBeDisabled();

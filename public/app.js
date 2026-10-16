@@ -1,28 +1,30 @@
-import { LaserTrace, LaserView, contentRect, encodePoint, parsePoint } from './laser.js';
+import { LASER_STYLES, LaserBoard, LaserView, contentRect, encodePoint, parsePoint, styleName, swatch } from './laser.js';
 
 const ui = Object.fromEntries([...document.querySelectorAll('[id]')].map((el) => [el.id, el]));
 const storageKey = 'screenpeek.session.v3';
 const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-let socket, session, room, stream, pendingStream, peer, captureJob;
+let socket, session, room, stream, pendingStream, captureJob;
 let online = false;
 let busy = false;
-let peerStatus = 'idle';
-let peerEpoch = -1;
-let candidates = [];
+// One video connection per remote person: the sharer has one to each viewer,
+// a viewer has one to the sharer. Keyed by that person's id.
+const links = new Map();
 let messages = Promise.resolve();
-let reconnectTimer, handshakeTimer, peerTimer, disconnectTimer;
+let reconnectTimer, handshakeTimer;
 let reconnectStarted = 0;
 let copyTimer;
 let lifecycle = 0;
-// Laser pointer. The sharer allows it; the viewer then chooses to point.
-const trace = new LaserTrace();
-let stageView, laserChannel, pip;
+// Laser pointer. The sharer allows it; each viewer then chooses to point.
+const board = new LaserBoard();
+let stageView, pip;
 let pipJob = 0;
 let laserMode = false;
 let laserRequest = 0;
 let laserWanted = null;
 let laserResume = false;
 let pointerDown = false;
+let peopleOpen = false;
+let peopleKey = '';
 
 function visible(element, show) { element.classList.toggle('hidden', !show); }
 function notice(message = '', error = false) {
@@ -45,21 +47,32 @@ function send(type, data = {}) {
   return true;
 }
 
-function closePeer() {
-  clearTimeout(peerTimer);
-  clearTimeout(disconnectTimer);
-  const previous = peer;
-  peer = null;
-  previous?.close();
-  laserChannel?.close();
-  laserChannel = null;
-  pointerDown = false;
-  trace.clear();
-  peerEpoch = -1;
-  candidates = [];
-  peerStatus = 'idle';
-  ui.remoteVideo.srcObject = null;
+function member(id) { return room?.members.find((item) => item.id === id); }
+function self() { return member(room?.you); }
+function sharerMember() { return room?.members.find((item) => item.role === 'sharer'); }
+// No name means Anonymous; their laser colour still tells them apart.
+function nameOf(person) { return person?.name || 'Anonymous'; }
+function viewers() { return room?.members.filter((item) => item.role === 'viewer' && item.id !== room.you) || []; }
+function sharerLink() { return room?.role === 'viewer' ? links.get(sharerMember()?.id) : undefined; }
+
+function closeLink(id) {
+  const link = links.get(id);
+  if (!link) return;
+  links.delete(id);
+  clearTimeout(link.timer);
+  clearTimeout(link.disconnectTimer);
+  link.pc.close();
+  link.channel?.close();
+  if (link.sharing) {
+    board.clear(id);
+    relay(id, { hide: true });
+  } else {
+    pointerDown = false;
+    board.clear();
+    ui.remoteVideo.srcObject = null;
+  }
 }
+function closeLinks() { for (const id of [...links.keys()]) closeLink(id); }
 
 function cancelCapture() {
   captureJob = null;
@@ -73,10 +86,12 @@ function goHome(message = '', error = false) {
   clearTimeout(handshakeTimer);
   clearTimeout(copyTimer);
   ui.copyBtn.textContent = 'Copy link';
+  ui.inviteBtn.textContent = 'Copy invite link';
   const previous = socket;
   socket = null;
   previous?.close();
-  closePeer();
+  closeLinks();
+  board.clear();
   cancelCapture();
   stopStream(stream);
   stream = null;
@@ -86,6 +101,7 @@ function goHome(message = '', error = false) {
   laserMode = false;
   laserWanted = null;
   laserResume = false;
+  peopleOpen = false;
   closePip();
   persist();
   online = false;
@@ -101,16 +117,28 @@ function goHome(message = '', error = false) {
 function laserOn() { return room?.role === 'sharer' && (laserWanted ?? room.laser) === true; }
 function canPoint() {
   return room?.role === 'viewer' && room.laser && online && room.ready && room.sharerOnline
-    && !room.paused && peerStatus === 'connected' && Boolean(ui.remoteVideo.srcObject);
+    && !room.paused && sharerLink()?.status === 'connected' && Boolean(ui.remoteVideo.srcObject);
 }
 
-function sendPoint(point) {
-  if (laserChannel?.readyState === 'open' && laserChannel.bufferedAmount < 16384) laserChannel.send(encodePoint(point));
+function sendOn(channel, data) {
+  if (channel?.readyState === 'open' && channel.bufferedAmount < 16384) channel.send(data);
+}
+function sendPoint(value) { sendOn(sharerLink()?.channel, encodePoint(value)); }
+// The sharer passes each viewer's pointer on to everyone else watching.
+function relay(from, value) {
+  const data = encodePoint(value, from);
+  for (const link of links.values()) if (link.sharing && link.id !== from) sendOn(link.channel, data);
 }
 function point(value) {
-  trace.apply(value);
+  board.apply(room.you, value);
   sendPoint(value);
 }
+board.look = (id) => {
+  const person = member(id);
+  // Name tags help tell pointers apart once more than one other person could point.
+  const label = !person || id === room?.you || (!person.name && (room?.members.length || 0) <= 2) ? '' : nameOf(person);
+  return { style: person?.style || 'red', label };
+};
 
 function setLaser(on) {
   laserRequest = Math.max(laserRequest + 1, Date.now());
@@ -160,8 +188,8 @@ function buildPip(win) {
     @media (prefers-reduced-motion: reduce) { .frame.flash { animation: none; } }`;
   doc.head.append(style);
   doc.body.innerHTML = `<div class="frame"><video autoplay muted playsinline></video><canvas></canvas>
-    <div class="paused" hidden>Sharing paused · they can’t see your screen</div></div>
-    <div class="bar"><span class="dot"></span><span class="label">Laser pointer on · they can point at your screen</span><button type="button">Turn off</button></div>`;
+    <div class="paused" hidden>Sharing paused · nobody can see your screen</div></div>
+    <div class="bar"><span class="dot"></span><span class="label">Laser pointer on · viewers can point at your screen</span><button type="button">Turn off</button></div>`;
   const video = doc.querySelector('video');
   const frame = doc.querySelector('.frame');
   const flash = (type) => {
@@ -170,8 +198,8 @@ function buildPip(win) {
     void frame.offsetWidth;
     frame.classList.add('flash');
   };
-  const current = { win, video, frame, flash, paused: doc.querySelector('.paused'), view: new LaserView(doc.querySelector('canvas'), video, trace) };
-  trace.listeners.add(flash);
+  const current = { win, video, frame, flash, paused: doc.querySelector('.paused'), view: new LaserView(doc.querySelector('canvas'), video, board) };
+  board.listeners.add(flash);
   pip = current;
   doc.querySelector('button').addEventListener('click', () => setLaser(false));
   win.addEventListener('pagehide', () => {
@@ -189,7 +217,7 @@ function buildPip(win) {
 function dropPip() {
   if (!pip) return;
   pip.view.destroy();
-  trace.listeners.delete(pip.flash);
+  board.listeners.delete(pip.flash);
   pip.video.srcObject = null;
   pip = null;
 }
@@ -206,25 +234,120 @@ function syncLaser() {
   if (!laserOn()) closePip();
   if (!room?.laser || sharer) laserMode = false;
   const pointing = laserMode && canPoint();
-  const receiving = laserOn() && !room.paused && hasStream();
   if (!pointing) pointerDown = false;
-  if (!pointing && !receiving && trace.busy()) {
-    if (!sharer) sendPoint({ hide: true });
-    trace.clear();
+  const own = room && !sharer ? board.get(room.you) : null;
+  if (own && !pointing) {
+    if (own.cursor) sendPoint({ hide: true });
+    board.clear(room.you);
   }
+  // Viewers see others' pointers under the same conditions that let them point.
+  const showing = sharer ? laserOn() && !room.paused && hasStream() : canPoint();
+  if (!showing && board.traces.size) board.clear();
+  for (const id of board.traces.keys()) if (!member(id)) board.clear(id);
   ui.laserCanvas.classList.toggle('pointing', pointing);
   const video = sharer ? ui.localVideo : ui.remoteVideo;
   if (stageView?.video !== video || !room) {
     stageView?.destroy();
-    stageView = room ? new LaserView(ui.laserCanvas, video, trace) : null;
+    stageView = room ? new LaserView(ui.laserCanvas, video, board) : null;
   }
+  stageView?.wake();
   if (pip) {
     if (pip.video.srcObject !== stream) {
       pip.video.srcObject = stream;
       pip.video.play().catch(() => {});
     }
     pip.paused.hidden = !room.paused;
+    pip.view.wake();
   }
+}
+
+// The people panel: your name, your laser, and everyone in the room.
+function renderPeople() {
+  const me = self();
+  const sharer = room.role === 'sharer';
+  ui.peopleCount.textContent = String(room.members.length);
+  ui.peopleBtn.setAttribute('aria-label', `People: ${room.members.length} of 7. Your name and laser`);
+  ui.peopleBtn.setAttribute('aria-expanded', String(peopleOpen));
+  ui.peopleBtn.style.setProperty('--swatch', swatch(me?.style));
+  visible(ui.peoplePanel, peopleOpen);
+  document.body.classList.toggle('people-open', peopleOpen);
+  ui.nameInput.disabled = !online;
+  ui.saveNameBtn.disabled = !online;
+  const key = JSON.stringify([room.you, room.members, online, sharer && [...links].map(([id, link]) => [id, link.status])]);
+  if (key === peopleKey) return;
+  peopleKey = key;
+
+  const holders = new Map(room.members.map((person) => [person.style, person]));
+  // Rebuilding the options would otherwise drop keyboard focus on the one just chosen.
+  const focused = document.activeElement?.closest?.('.style-option')?.dataset.style;
+  ui.styleOptions.replaceChildren(...LASER_STYLES.map((style) => {
+    const holder = holders.get(style.id);
+    const mine = holder?.id === room.you;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'style-option';
+    button.dataset.style = style.id;
+    button.style.setProperty('--swatch', swatch(style.id));
+    button.setAttribute('aria-pressed', String(mine));
+    button.disabled = !online || (holder && !mine);
+    const taken = holder && !mine ? ` · taken by ${nameOf(holder)}` : '';
+    button.setAttribute('aria-label', `${style.name}${mine ? ' · yours' : taken}`);
+    button.title = `${style.name}${mine ? ' (yours)' : taken}`;
+    const dot = document.createElement('span');
+    dot.className = 'style-swatch';
+    const label = document.createElement('span');
+    label.className = 'style-name';
+    label.textContent = style.name;
+    button.append(dot, label);
+    return button;
+  }));
+  if (focused) {
+    const option = ui.styleOptions.querySelector(`[data-style="${focused}"]`);
+    (option && !option.disabled ? option : ui.peoplePanel).focus({ preventScroll: true });
+  }
+
+  ui.peopleList.replaceChildren(...room.members.map((person) => {
+    const item = document.createElement('li');
+    item.className = 'person';
+    const dot = document.createElement('span');
+    dot.className = 'person-dot';
+    dot.style.setProperty('--swatch', swatch(person.style));
+    dot.title = `${styleName(person.style)} laser`;
+    const name = document.createElement('span');
+    name.className = 'person-name';
+    name.textContent = nameOf(person);
+    const tags = [];
+    if (person.id === room.you) tags.push('you');
+    if (person.role === 'sharer') tags.push('sharing');
+    let state = '';
+    if (!person.online) state = 'Reconnecting…';
+    else if (sharer && person.id !== room.you) {
+      const status = links.get(person.id)?.status;
+      state = status === 'connected' ? 'Watching' : status === 'failed' ? 'Couldn’t connect' : 'Connecting…';
+    }
+    item.append(dot, name, ...tags.map((text) => {
+      const tag = document.createElement('span');
+      tag.className = 'person-tag';
+      tag.textContent = text;
+      return tag;
+    }));
+    if (state) {
+      const status = document.createElement('span');
+      status.className = 'person-state';
+      status.textContent = state;
+      item.append(status);
+    }
+    return item;
+  }));
+}
+
+function openPeople(open) {
+  if (open === peopleOpen || !room) return;
+  peopleOpen = open;
+  if (open) ui.nameInput.value = self()?.name || '';
+  render();
+  // Straight to the name field while you don't have one yet.
+  if (open && !self()?.name) ui.nameInput.focus({ preventScroll: true });
 }
 
 function render() {
@@ -236,14 +359,27 @@ function render() {
   ui.joinBtn.disabled = busy || Boolean(captureJob);
   ui.codeInput.disabled = busy || Boolean(captureJob);
   ui.startBtn.textContent = captureJob?.kind === 'create' ? 'Choose your screen…' : busy && !room ? 'Connecting…' : 'Share my screen ↗';
-  if (!room) return;
+  if (!room) {
+    visible(ui.peoplePanel, false);
+    document.body.classList.remove('people-open');
+    peopleKey = '';
+    return;
+  }
 
   const sharer = room.role === 'sharer';
   ui.session.dataset.role = room.role;
+  const watchers = sharer ? viewers() : [];
+  const watching = watchers.filter((person) => person.online);
+  const statuses = watching.map((person) => links.get(person.id)?.status || 'connecting');
+  const connectedCount = statuses.filter((status) => status === 'connected').length;
+  const peerStatus = sharer
+    ? (connectedCount ? 'connected' : statuses.length && statuses.every((status) => status === 'failed') ? 'failed' : 'connecting')
+    : sharerLink()?.status || 'idle';
   const connected = peerStatus === 'connected';
   const live = online && room.ready && !room.paused && hasStream();
+  const sharerName = nameOf(sharerMember());
   ui.roleLabel.textContent = sharer ? 'You have the floor' : 'A shared view';
-  ui.sessionTitle.textContent = sharer ? 'Sharing your screen' : 'Watching their screen';
+  ui.sessionTitle.textContent = sharer ? 'Sharing your screen' : `Watching ${sharerName}’s screen`;
   ui.roomCode.textContent = room.code;
   const url = new URL(location.href);
   url.search = '';
@@ -272,18 +408,23 @@ function render() {
   } else if (room.paused) {
     status = 'Paused';
     title = 'Sharing paused';
-    description = sharer ? 'Your screen is hidden from the viewer. Resume whenever you’re ready.' : 'Your partner has paused their screen. It will return when they resume.';
-  } else if (room.partner !== 'online' && sharer) {
-    status = room.partner === 'reconnecting' ? 'Viewer reconnecting' : 'Waiting for viewer';
+    description = sharer ? 'Your screen is hidden from everyone. Resume whenever you’re ready.' : `${sharerName} paused their screen. It will return when they resume.`;
+  } else if (sharer && !watching.length) {
+    status = watchers.length ? 'Viewer reconnecting' : 'Waiting for viewer';
     overlay = !live;
   } else if (peerStatus === 'failed') {
     status = 'Couldn’t connect'; tone = 'error';
     title = 'Let’s try that again';
     description = 'The screen connection was interrupted. Retry, or try another network if it keeps happening.';
+  } else if (sharer) {
+    if (connectedCount) tone = 'live';
+    if (connectedCount === watching.length) status = connectedCount === 1 ? 'Viewer connected' : `${connectedCount} viewers connected`;
+    else if (connectedCount) status = `${connectedCount} of ${watching.length} viewers connected`;
+    overlay = !live;
   } else if (connected) {
-    status = sharer ? 'Viewer connected' : 'Live'; tone = 'live';
+    status = 'Live'; tone = 'live';
     overlay = false;
-  } else if (sharer && live) overlay = false;
+  }
 
   ui.sessionStatus.textContent = status;
   ui.statusBadge.dataset.tone = tone;
@@ -297,28 +438,34 @@ function render() {
   visible(ui.resumeBtn, online && sharer && (!hasStream() || !room.ready));
   ui.resumeBtn.disabled = Boolean(captureJob);
   ui.resumeBtn.textContent = captureJob ? 'Choose your screen…' : 'Resume sharing';
-  visible(ui.retryBtn, online && room.ready && room.partner === 'online' && peerStatus === 'failed' && !room.paused);
+  visible(ui.retryBtn, online && room.ready && peerStatus === 'failed' && !room.paused && (sharer ? watching.length > 0 : room.sharerOnline));
   visible(ui.pauseBtn, sharer);
   ui.pauseBtn.textContent = room.paused ? 'Resume' : 'Pause';
   ui.pauseBtn.disabled = !online || !hasStream() || !room.ready;
   visible(ui.flipBtn, sharer);
-  ui.flipBtn.disabled = !online || !hasStream() || !room.ready || room.partner !== 'online' || Boolean(room.flipId);
+  ui.flipBtn.disabled = !online || !hasStream() || !room.ready || !watching.length || Boolean(room.flipId);
   ui.flipBtn.textContent = room.flipId ? 'Flip requested' : 'Flip ⇄';
   ui.leaveBtn.textContent = sharer ? 'End screenpeek' : 'Leave';
+  ui.leaveBtn.title = sharer && room.members.length > 1 ? 'Ends the screenpeek for everyone' : '';
   visible(ui.laserBtn, sharer || room.laser);
   const laserActive = sharer ? laserOn() : laserMode;
   ui.laserBtn.setAttribute('aria-pressed', String(laserActive));
+  ui.laserBtn.style.setProperty('--swatch', swatch(sharer ? 'red' : self()?.style));
   ui.laserBtn.disabled = sharer ? !online || !hasStream() || !room.ready : !canPoint();
   ui.laserLabel.textContent = sharer ? (laserActive ? 'Laser on' : 'Laser pointer') : (laserActive ? 'Pointing' : 'Laser');
   ui.laserBtn.title = sharer
-    ? (laserActive ? 'Turn off the laser pointer' : 'Let them point at your screen with a laser pointer')
+    ? (laserActive ? 'Turn off the laser pointer' : 'Let viewers point at your screen with a laser pointer')
     : (laserActive ? 'Stop pointing (Esc)' : 'Point at their screen. Click and drag to circle something.');
+  const full = room.members.length >= 7;
   ui.sessionHint.textContent = sharer
-    ? (room.partner === 'absent' ? 'Invite someone with the code or link above.'
-      : laserActive ? 'They can point at your screen. The floating window shows where.' : 'Pause for privacy. Flip to give them the floor.')
+    ? (room.members.length === 1 ? 'Invite up to six people with the code or link above.'
+      : laserActive ? 'Viewers can point at your screen. The floating window shows where.'
+        : full ? 'The room is full: seven people. Flip to give someone else the floor.'
+          : 'Pause for privacy. Flip to give someone else the floor.')
     : 'You can stay in this room while you take turns sharing.';
 
   const flipping = online && Boolean(room.flipId);
+  const group = sharer ? watching.length > 1 : room.members.length > 2;
   visible(ui.flipPrompt, flipping);
   visible(ui.acceptFlipBtn, !sharer);
   visible(ui.declineFlipBtn, !sharer);
@@ -326,10 +473,13 @@ function render() {
   ui.acceptFlipBtn.disabled = Boolean(captureJob);
   ui.acceptFlipBtn.textContent = captureJob ? 'Choose your screen…' : 'Accept & share';
   ui.declineFlipBtn.disabled = Boolean(captureJob);
-  ui.flipTitle.textContent = sharer ? 'Waiting for them to accept' : 'Your turn to share?';
+  ui.flipTitle.textContent = sharer ? (group ? 'Offering the floor to everyone' : 'Waiting for them to accept') : 'Your turn to share?';
   ui.flipDescription.textContent = sharer
-    ? 'You keep the floor until they choose a screen. You can cancel any time.'
-    : 'Choose what to share. Their screen stays live until you accept.';
+    ? (group ? 'Whoever accepts first shares next. You keep the floor until then and can cancel any time.'
+      : 'You keep the floor until they choose a screen. You can cancel any time.')
+    : (group ? `${sharerName} is offering the floor. Whoever accepts first shares next; their screen stays live until then.`
+      : 'Choose what to share. Their screen stays live until you accept.');
+  renderPeople();
 }
 
 function watchStream(value) {
@@ -340,7 +490,7 @@ function watchStream(value) {
     } else if (pendingStream === value) {
       send('decline-flip', { flipId: room?.flipId });
       cancelCapture();
-      notice('Screen selection ended. The other person keeps the floor.');
+      notice('Screen selection ended. The current sharer keeps the floor.');
       render();
     }
   }, { once: true });
@@ -368,14 +518,14 @@ function connect(action) {
       await onMessage(JSON.parse(event.data));
     }).catch((error) => {
       console.error('Session message failed', error);
-      if (socket === ws) connectionFailed();
+      if (socket === ws) for (const link of links.values()) linkFailed(link);
     });
   });
   ws.addEventListener('close', () => {
     if (socket !== ws) return;
     clearTimeout(handshakeTimer);
     online = false;
-    closePeer();
+    closeLinks();
     cancelCapture();
     if (!session) {
       goHome('Could not reach the sharing service. Please try again.', true);
@@ -391,75 +541,138 @@ function connect(action) {
   });
 }
 
-function connectionFailed() {
-  if (!room) return;
-  peerStatus = 'failed';
-  clearTimeout(peerTimer);
+function linkFailed(link) {
+  if (links.get(link.id) !== link) return;
+  link.status = 'failed';
+  clearTimeout(link.timer);
   render();
 }
 
-function makePeer(epoch) {
-  closePeer();
+function openLink(id, epoch) {
+  closeLink(id);
+  const sharing = room.role === 'sharer';
   const pc = new RTCPeerConnection(rtcConfig);
-  peer = pc;
-  peerEpoch = epoch;
-  peerStatus = 'connecting';
-  peerTimer = setTimeout(() => { if (peer === pc) connectionFailed(); }, 15000);
+  const link = { id, pc, epoch, sharing, status: 'connecting', candidates: [], channel: null };
+  links.set(id, link);
+  const current = () => links.get(id) === link;
+  link.timer = setTimeout(() => linkFailed(link), 15000);
   pc.onicecandidate = ({ candidate }) => {
-    if (candidate && peer === pc) send('signal', { epoch, data: { candidate } });
+    if (candidate && current()) signal(link, { candidate });
   };
   pc.ondatachannel = ({ channel }) => {
-    if (peer === pc && room?.role === 'viewer' && channel.label === 'laser') watchLaserChannel(pc, channel);
+    if (current() && !sharing && channel.label === 'laser') watchChannel(link, channel);
   };
   pc.ontrack = ({ streams }) => {
-    if (peer !== pc || room?.role !== 'viewer') return;
+    if (!current() || sharing) return;
     ui.remoteVideo.srcObject = streams[0];
     ui.remoteVideo.play().catch(() => {});
   };
   pc.onconnectionstatechange = () => {
-    if (peer !== pc) return;
+    if (!current()) return;
     if (pc.connectionState === 'connected') {
-      clearTimeout(peerTimer);
-      clearTimeout(disconnectTimer);
-      peerStatus = 'connected';
-    } else if (pc.connectionState === 'failed') connectionFailed();
+      clearTimeout(link.timer);
+      clearTimeout(link.disconnectTimer);
+      link.status = 'connected';
+    } else if (pc.connectionState === 'failed') linkFailed(link);
     else if (pc.connectionState === 'disconnected') {
-      peerStatus = 'connecting';
-      disconnectTimer = setTimeout(() => { if (peer === pc) connectionFailed(); }, 5000);
+      link.status = 'connecting';
+      link.disconnectTimer = setTimeout(() => linkFailed(link), 5000);
     }
     render();
   };
-  return pc;
+  return link;
 }
 
-function watchLaserChannel(pc, channel) {
-  laserChannel = channel;
+function signal(link, data) {
+  send('signal', link.sharing ? { to: link.id, epoch: link.epoch, data } : { epoch: link.epoch, data });
+}
+
+function watchChannel(link, channel) {
+  link.channel = channel;
   channel.addEventListener('message', ({ data }) => {
-    // The sharer decides whether pointing is allowed, so it filters what arrives.
-    if (peer !== pc || room?.role !== 'sharer' || !laserOn() || room.paused) return;
+    if (links.get(link.id) !== link || !room) return;
     const value = parsePoint(data);
-    if (value) trace.apply(value);
+    if (!value) return;
+    if (link.sharing) {
+      // The sharer decides whether pointing is allowed, so it filters what arrives,
+      // and it knows who sent each point from the connection it came in on.
+      if (!laserOn() || room.paused) return;
+      board.apply(link.id, value);
+      relay(link.id, value);
+    } else if (canPoint() && value.from && value.from !== room.you && member(value.from)) {
+      board.apply(value.from, value);
+    }
   });
   channel.addEventListener('close', () => {
-    if (laserChannel !== channel) return;
-    laserChannel = null;
-    trace.clear();
+    if (link.channel !== channel) return;
+    link.channel = null;
+    if (link.sharing) {
+      board.clear(link.id);
+      relay(link.id, { hide: true });
+    } else board.clear();
   });
 }
 
-async function negotiate() {
-  if (!room || !online || !room.ready || room.partner !== 'online') return;
-  const epoch = room.epoch;
-  const pc = makePeer(epoch);
-  if (room.role === 'sharer' && hasStream()) {
-    for (const track of stream.getTracks()) pc.addTrack(track, stream);
-    watchLaserChannel(pc, pc.createDataChannel('laser', { ordered: true, maxRetransmits: 0 }));
-    const offer = await pc.createOffer();
-    if (peer !== pc) return;
-    await pc.setLocalDescription(offer);
-    if (peer === pc) send('signal', { epoch, data: { description: pc.localDescription } });
+async function offer(link) {
+  try {
+    for (const track of stream.getTracks()) link.pc.addTrack(track, stream);
+    watchChannel(link, link.pc.createDataChannel('laser', { ordered: true, maxRetransmits: 0 }));
+    const description = await link.pc.createOffer();
+    if (links.get(link.id) !== link) return;
+    await link.pc.setLocalDescription(description);
+    if (links.get(link.id) === link) signal(link, { description: link.pc.localDescription });
+  } catch (error) {
+    // A connection closed mid-offer was replaced on purpose; only a live one has failed.
+    if (links.get(link.id) !== link) return;
+    console.warn('Could not start a screen connection', error);
+    linkFailed(link);
   }
-  render();
+}
+
+// Bring connections in line with the room: one per online viewer for the
+// sharer, one to the sharer for a viewer. Connections whose generation is
+// unchanged are left alone, so people joining or leaving don't interrupt others.
+async function reconcile() {
+  const wanted = new Map();
+  if (room && online && room.ready) {
+    if (room.role === 'sharer') {
+      if (hasStream()) for (const person of viewers()) if (person.online) wanted.set(person.id, person.link);
+    } else if (room.sharerOnline && sharerMember()) wanted.set(sharerMember().id, room.epoch);
+  }
+  const sharing = room?.role === 'sharer';
+  for (const [id, link] of [...links]) {
+    if (wanted.get(id) !== link.epoch || link.sharing !== sharing) closeLink(id);
+  }
+  const offers = [];
+  for (const [id, epoch] of wanted) {
+    if (links.has(id)) continue;
+    const link = openLink(id, epoch);
+    if (link.sharing) offers.push(offer(link));
+  }
+  await Promise.all(offers);
+}
+
+async function applySignal(link, data) {
+  const { pc } = link;
+  const { description, candidate } = data;
+  const current = () => links.get(link.id) === link;
+  if (description) {
+    if ((!link.sharing && description.type !== 'offer') || (link.sharing && description.type !== 'answer')) return;
+    await pc.setRemoteDescription(description);
+    if (!current()) return;
+    for (const queued of link.candidates) await pc.addIceCandidate(queued);
+    link.candidates = [];
+    if (description.type === 'offer') {
+      const answer = await pc.createAnswer();
+      if (!current()) return;
+      await pc.setLocalDescription(answer);
+      if (current()) signal(link, { description: pc.localDescription });
+    }
+  }
+  if (candidate) {
+    if (pc.remoteDescription) await pc.addIceCandidate(candidate);
+    else link.candidates.push(candidate);
+  }
 }
 
 async function onMessage(msg) {
@@ -498,48 +711,39 @@ async function onMessage(msg) {
     if (captureJob?.kind === 'resume' && room.ready) captureJob = null;
     if (captureJob?.kind === 'create') captureJob = null;
     if (room.role === 'sharer' && room.ready && !hasStream()) send('not-ready');
-    if (previous?.role && previous.role !== room.role) notice('Floor flipped. You’re now ' + (room.role === 'sharer' ? 'sharing.' : 'watching.'));
+    const before = previous?.members.find((person) => person.role === 'sharer');
+    const now = sharerMember();
+    if (previous?.role && previous.role !== room.role) notice(room.role === 'sharer' ? 'Floor flipped. You’re now sharing.' : `Floor flipped. ${nameOf(now)} is sharing now.`);
+    else if (room.role === 'viewer' && before && now && before.id !== now.id) notice(`Floor flipped. ${nameOf(now)} is sharing now.`);
     else if (room.role === 'viewer' && room.laser !== Boolean(previous?.laser)) {
       if (room.laser) {
         notice('They turned on the laser pointer. Choose Laser to point at their screen.');
         ui.laserBtn.classList.add('invite');
       } else notice('They turned off the laser pointer.');
     }
-    if (!previous || previous.epoch !== room.epoch) {
-      closePeer();
-      await negotiate();
-    }
+    await reconcile();
     render();
     return;
   }
   if (msg.type === 'signal') {
-    if (!room || msg.epoch !== room.epoch || msg.epoch !== peerEpoch || !peer) return;
-    const pc = peer;
-    const { description, candidate } = msg.data;
-    if (description) {
-      if ((room.role === 'viewer' && description.type !== 'offer') || (room.role === 'sharer' && description.type !== 'answer')) return;
-      await pc.setRemoteDescription(description);
-      if (pc !== peer) return;
-      for (const queued of candidates) await pc.addIceCandidate(queued);
-      candidates = [];
-      if (description.type === 'offer') {
-        const answer = await pc.createAnswer();
-        if (pc !== peer) return;
-        await pc.setLocalDescription(answer);
-        if (pc === peer) send('signal', { epoch: room.epoch, data: { description: pc.localDescription } });
-      }
-    }
-    if (candidate) {
-      if (pc.remoteDescription) await pc.addIceCandidate(candidate);
-      else candidates.push(candidate);
+    if (!room || !msg.data || typeof msg.data !== 'object') return;
+    const link = links.get(room.role === 'sharer' ? msg.from : sharerMember()?.id);
+    if (!link || msg.epoch !== link.epoch) return;
+    try {
+      await applySignal(link, msg.data);
+    } catch (error) {
+      if (links.get(link.id) !== link) return;
+      console.warn('Screen connection signal failed', error);
+      linkFailed(link);
     }
     return;
   }
   if (msg.type === 'ended' || (msg.type === 'error' && msg.fatal)) {
     goHome(msg.message, msg.type === 'error');
   } else if (msg.type === 'flip-rejected') {
+    // Losing the race for the floor is part of taking turns, not an error.
     cancelCapture();
-    notice(msg.message, true);
+    notice(msg.message);
     render();
   } else if (msg.type === 'notice' || msg.type === 'error') notice(msg.message, msg.type === 'error');
 }
@@ -588,7 +792,7 @@ async function capture(kind) {
     if (kind === 'flip') send('decline-flip', { flipId: job.flipId });
     const cancelled = error.name === 'NotAllowedError' || error.name === 'AbortError';
     notice(cancelled
-      ? (kind === 'flip' ? 'Screen selection cancelled. The other person keeps the floor.' : 'Screen selection cancelled. You can try again when you’re ready.')
+      ? (kind === 'flip' ? 'Screen selection cancelled. The current sharer keeps the floor.' : 'Screen selection cancelled. You can try again when you’re ready.')
       : 'Could not share that screen. Check your browser’s screen-recording permission and try again.', !cancelled);
   }
   render();
@@ -635,6 +839,24 @@ ui.laserBtn.addEventListener('click', () => {
 });
 ui.laserBtn.addEventListener('animationend', () => ui.laserBtn.classList.remove('invite'));
 
+ui.peopleBtn.addEventListener('click', () => openPeople(!peopleOpen));
+ui.closePeopleBtn.addEventListener('click', () => {
+  openPeople(false);
+  ui.peopleBtn.focus();
+});
+ui.nameForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (send('name', { name: ui.nameInput.value })) ui.nameInput.blur();
+});
+ui.styleOptions.addEventListener('click', (event) => {
+  const option = event.target.closest('.style-option');
+  if (option && !option.disabled) send('style', { style: option.dataset.style });
+});
+// Clicking anywhere else closes the panel.
+document.addEventListener('pointerdown', (event) => {
+  if (peopleOpen && !ui.peoplePanel.contains(event.target) && !ui.peopleBtn.contains(event.target)) openPeople(false);
+});
+
 function pointerAt(event) {
   const box = ui.laserCanvas.getBoundingClientRect();
   const rect = contentRect(ui.remoteVideo, box.width, box.height);
@@ -644,9 +866,10 @@ function pointerAt(event) {
 const inside = (value) => value.x >= 0 && value.x <= 1 && value.y >= 0 && value.y <= 1;
 const clamp = (value) => Math.min(1, Math.max(0, value));
 function pointing() { return ui.laserCanvas.classList.contains('pointing'); }
+function ownCursor() { return Boolean(room && board.get(room.you)?.cursor); }
 function hidePointer() {
   pointerDown = false;
-  if (trace.cursor) point({ hide: true });
+  if (ownCursor()) point({ hide: true });
 }
 
 ui.laserCanvas.addEventListener('pointerdown', (event) => {
@@ -665,7 +888,7 @@ ui.laserCanvas.addEventListener('pointermove', (event) => {
   // While drawing, keep the line on the screen edge instead of breaking it.
   if (pointerDown) point({ x: clamp(value.x), y: clamp(value.y), down: true });
   else if (event.pointerType !== 'touch' && inside(value)) point({ ...value, down: false });
-  else if (trace.cursor) point({ hide: true });
+  else if (ownCursor()) point({ hide: true });
 });
 for (const type of ['pointerup', 'pointercancel']) {
   ui.laserCanvas.addEventListener(type, (event) => {
@@ -679,14 +902,19 @@ for (const type of ['pointerup', 'pointercancel']) {
 ui.laserCanvas.addEventListener('pointerleave', () => { if (!pointerDown) hidePointer(); });
 window.addEventListener('blur', () => { if (pointing()) hidePointer(); });
 document.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape' || !laserMode) return;
-  laserMode = false;
-  render();
+  if (event.key !== 'Escape') return;
+  if (peopleOpen) {
+    openPeople(false);
+    ui.peopleBtn.focus();
+  } else if (laserMode) {
+    laserMode = false;
+    render();
+  }
 });
 
 ui.retryBtn.addEventListener('click', () => {
   notice();
-  peerStatus = 'connecting';
+  for (const link of links.values()) link.status = 'connecting';
   render();
   send('retry');
 });
@@ -695,18 +923,25 @@ ui.leaveBtn.addEventListener('click', () => {
   send(sharing ? 'end' : 'leave');
   goHome(sharing ? 'Your screenpeek has ended.' : 'You left the screenpeek.');
 });
-ui.copyBtn.addEventListener('click', async () => {
+async function copyLink(button) {
   try {
     await navigator.clipboard.writeText(ui.shareLink.value);
-    ui.copyBtn.textContent = 'Copied!';
+    button.textContent = 'Copied!';
     clearTimeout(copyTimer);
-    copyTimer = setTimeout(() => { ui.copyBtn.textContent = 'Copy link'; }, 1800);
+    copyTimer = setTimeout(() => {
+      ui.copyBtn.textContent = 'Copy link';
+      ui.inviteBtn.textContent = 'Copy invite link';
+    }, 1800);
   } catch {
-    ui.shareLink.focus();
-    ui.shareLink.select();
-    notice('Copy the selected link to invite someone.');
+    if (button === ui.copyBtn) {
+      ui.shareLink.focus();
+      ui.shareLink.select();
+      notice('Copy the selected link to invite someone.');
+    } else notice(`Copying was blocked. Share this link: ${ui.shareLink.value}`);
   }
-});
+}
+ui.copyBtn.addEventListener('click', () => copyLink(ui.copyBtn));
+ui.inviteBtn.addEventListener('click', () => copyLink(ui.inviteBtn));
 document.querySelector('.brand').addEventListener('click', (event) => {
   event.preventDefault();
   if (room) send(room.role === 'sharer' ? 'end' : 'leave');

@@ -11,7 +11,8 @@ test.afterEach(async ({ browser }) => {
   for (const context of browser.contexts()) await context.close();
 });
 
-// Strongest laser-red alpha (0–255) within a few pixels of a normalized video point.
+// Strongest laser alpha (0–255) within a few pixels of a normalized video point.
+// Lasers are strongly coloured; name tags and highlights are not, so they don't count.
 async function laserAt(page, where, x, y) {
   return page.evaluate(async ({ where, x, y }) => {
     const { contentRect } = await import('/laser.js');
@@ -34,7 +35,7 @@ async function laserAt(page, where, x, y) {
     const data = canvas.getContext('2d').getImageData(left, top, radius * 2 + 1, radius * 2 + 1).data;
     let best = 0;
     for (let i = 0; i < data.length; i += 4) {
-      if (data[i] > 150 && data[i + 1] < 140 && data[i + 2] < 140) best = Math.max(best, data[i + 3]);
+      if (Math.max(data[i], data[i + 1], data[i + 2]) - Math.min(data[i], data[i + 1], data[i + 2]) > 60) best = Math.max(best, data[i + 3]);
     }
     return best;
   }, { where, x, y });
@@ -169,7 +170,7 @@ test('click and drag leaves a trail that fades smoothly and quickly, with a puls
       const x = Math.round(rect.x + 0.2 * rect.width - 28 * ratio), y = Math.round(rect.y + 0.5 * rect.height);
       const data = canvas.getContext('2d').getImageData(x - 3, y - 3, 7, 7).data;
       let best = 0;
-      for (let i = 0; i < data.length; i += 4) if (data[i] > 150 && data[i + 1] < 140) best = Math.max(best, data[i + 3]);
+      for (let i = 0; i < data.length; i += 4) if (Math.max(data[i], data[i + 1], data[i + 2]) - Math.min(data[i], data[i + 1], data[i + 2]) > 60) best = Math.max(best, data[i + 3]);
       window.ringSamples.push(best);
       if (performance.now() - start < 1500) win.requestAnimationFrame(sample);
     };
@@ -192,7 +193,7 @@ test('click and drag leaves a trail that fades smoothly and quickly, with a puls
       const x = Math.round(rect.x + rect.width / 2), y = Math.round(rect.y + rect.height / 2);
       const data = canvas.getContext('2d').getImageData(x - 4, y - 4, 9, 9).data;
       let best = 0;
-      for (let i = 0; i < data.length; i += 4) if (data[i] > 150 && data[i + 1] < 140) best = Math.max(best, data[i + 3]);
+      for (let i = 0; i < data.length; i += 4) if (Math.max(data[i], data[i + 1], data[i + 2]) - Math.min(data[i], data[i + 1], data[i + 2]) > 60) best = Math.max(best, data[i + 3]);
       return best;
     };
     const start = performance.now();

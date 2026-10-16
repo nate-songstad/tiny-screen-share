@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f5f6f4" />
   <title>Screenpeek — just your screen</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='5' width='26' height='19' rx='5' fill='%23213932'/%3E%3Cpath d='M11 28h10' stroke='%23213932' stroke-width='3'/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="/style.css?v=4" />
+  <link rel="stylesheet" href="/style.css?v=5" />
 </head>
 <body>
   <header class="site-header">
@@ -18,7 +18,7 @@
     <section id="home" class="home card" aria-labelledby="homeTitle">
       <div class="eyebrow">A little less meeting</div>
       <h1 id="homeTitle">Let me show you.</h1>
-      <p class="intro">One screen. Two people.<br />Share a link and get straight to it.</p>
+      <p class="intro">One screen. Up to seven people.<br />Share a link and get straight to it.</p>
       <button id="startBtn" class="primary wide">Share my screen <span aria-hidden="true">↗</span></button>
       <p class="helper centered">Choose a tab, window, or your entire screen.</p>
       <div class="divider"><span>or join someone</span></div>
@@ -64,16 +64,31 @@
 
       <div class="toolbar">
         <p id="sessionHint" class="helper">Your room stays open while you switch screens.</p>
+        <div id="peoplePanel" class="people-panel hidden" role="dialog" tabindex="-1" aria-labelledby="peopleTitle">
+          <div class="people-head"><h2 id="peopleTitle">In this screenpeek</h2><button id="closePeopleBtn" class="icon-btn" type="button" aria-label="Close">×</button></div>
+          <form id="nameForm" class="name-form">
+            <label for="nameInput">Your name <span class="optional">· optional</span></label>
+            <div class="input-row"><input id="nameInput" maxlength="32" placeholder="Add your name" autocomplete="nickname" enterkeyhint="done" /><button id="saveNameBtn" class="secondary" type="submit">Save</button></div>
+          </form>
+          <fieldset id="stylePicker" class="style-picker">
+            <legend>Your laser</legend>
+            <div id="styleOptions" class="style-options"></div>
+            <p id="styleHint" class="helper">Fun lasers are first come, first served. No two people share one.</p>
+          </fieldset>
+          <ul id="peopleList" class="people-list"></ul>
+          <button id="inviteBtn" class="secondary invite-btn" type="button">Copy invite link</button>
+        </div>
         <div class="toolbar-actions">
+          <button id="peopleBtn" class="secondary people-btn" type="button" aria-expanded="false" aria-controls="peoplePanel"><span class="people-icon" aria-hidden="true"></span><span id="peopleCount">1</span></button>
           <button id="laserBtn" class="secondary laser-btn hidden" aria-pressed="false"><span class="laser-dot" aria-hidden="true"></span><span id="laserLabel">Laser pointer</span></button>
           <button id="pauseBtn" class="secondary">Pause</button>
-          <button id="flipBtn" class="secondary" title="Invite the other person to share their screen">Flip <span aria-hidden="true">⇄</span></button>
+          <button id="flipBtn" class="secondary" title="Offer the floor. Whoever accepts first shares next.">Flip <span aria-hidden="true">⇄</span></button>
           <button id="leaveBtn" class="danger">End screenpeek</button>
         </div>
       </div>
     </section>
     <p class="page-footer">A shared view. A simpler conversation.</p>
   </main>
-  <script type="module" src="/app.js?v=4"></script>
+  <script type="module" src="/app.js?v=5"></script>
 </body>
 </html>
