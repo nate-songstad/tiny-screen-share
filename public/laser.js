@@ -121,6 +121,8 @@ export class LaserBoard {
     this.listeners = new Set();
     // Set by the app: how a person's pointer looks ({ style, label }).
     this.look = () => ({ style: 'red', label: '' });
+    // Optional: told about every change, so another board can mirror this one.
+    this.mirror = null;
   }
 
   emit(type) { for (const listener of this.listeners) listener(type); }
@@ -135,6 +137,7 @@ export class LaserBoard {
       this.traces.set(id, trace);
     }
     trace.apply(point, now);
+    this.mirror?.('apply', id, point);
   }
 
   get(id) { return this.traces.get(id); }
@@ -143,6 +146,7 @@ export class LaserBoard {
   clear(id) {
     if (id === undefined) this.traces.clear();
     else this.traces.delete(id);
+    this.mirror?.('clear', id);
     this.emit('change');
   }
 
@@ -290,7 +294,7 @@ export class LaserView {
     const win = canvas.ownerDocument.defaultView;
     this.observer = win?.ResizeObserver ? new win.ResizeObserver(this.listener) : null;
     this.observer?.observe(canvas);
-    video.addEventListener('resize', this.listener);
+    video.addEventListener?.('resize', this.listener);
   }
 
   wake() {
@@ -320,7 +324,7 @@ export class LaserView {
   destroy() {
     this.board.listeners.delete(this.listener);
     this.observer?.disconnect();
-    this.video.removeEventListener('resize', this.listener);
+    this.video.removeEventListener?.('resize', this.listener);
     const win = this.canvas?.ownerDocument.defaultView;
     if (this.frame) win?.cancelAnimationFrame(this.frame);
     this.canvas?.getContext('2d').clearRect(0, 0, this.canvas.width, this.canvas.height);

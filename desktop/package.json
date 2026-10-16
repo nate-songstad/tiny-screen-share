@@ -1,0 +1,74 @@
+{
+  "name": "screenpeek-desktop",
+  "productName": "Screenpeek",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Screenpeek for Mac, with the laser pointer drawn right on your screen.",
+  "main": "src/main.js",
+  "type": "module",
+  "scripts": {
+    "start": "npm run sync && electron .",
+    "sync": "node -e \"require('fs').copyFileSync('../public/laser.js','src/vendor/laser.js')\"",
+    "assets": "electron scripts/assets.cjs",
+    "dist": "npm run sync && electron-builder --mac --universal",
+    "test": "npm run sync && playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "electron": "^44.8.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "me.screenpeek.desktop",
+    "productName": "Screenpeek",
+    "copyright": "Screenpeek",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.icns",
+      "minimumSystemVersion": "12.0",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "notarize": false
+    },
+    "dmg": {
+      "title": "Screenpeek",
+      "artifactName": "Screenpeek.dmg",
+      "background": "build/background.tiff",
+      "icon": "build/icon.icns",
+      "iconSize": 100,
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 140,
+          "y": 190,
+          "type": "file"
+        },
+        {
+          "x": 400,
+          "y": 190,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
+  }
+}

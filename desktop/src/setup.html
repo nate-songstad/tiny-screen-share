@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'" />
+  <title>Set up Screenpeek</title>
+  <link rel="stylesheet" href="./pages.css" />
+  <style>
+    :root { background: #f5f6f4; }
+    .step { flex: 1; padding: 34px 40px 20px; overflow: auto; }
+    .eyebrow { text-transform: uppercase; letter-spacing: 1.8px; font-size: 10px; font-weight: 700; color: #69806c; margin-bottom: 12px; }
+    h1 { font-size: 26px; letter-spacing: -.8px; margin-bottom: 10px; }
+    .list { margin: 20px 0 0; padding: 0; list-style: none; display: grid; gap: 12px; }
+    .list li { display: flex; gap: 12px; font-size: 13.5px; line-height: 1.5; color: #3b4d42; }
+    .list .mark { width: 22px; height: 22px; border-radius: 50%; background: #e6eee3; color: #2f4a37; display: grid; place-items: center; font-size: 12px; flex-shrink: 0; }
+    .laser { width: 10px; height: 10px; border-radius: 50%; background: #ff2d2d; box-shadow: 0 0 0 4px #ff2d2d22, 0 0 10px #ff2d2d; display: inline-block; margin-right: 6px; }
+    .progress { display: flex; gap: 6px; }
+    .progress span { width: 7px; height: 7px; border-radius: 50%; background: #d3dbd2; }
+    .progress span.on { background: var(--green); }
+    .footer { background: #fff; }
+    .status { margin-top: 18px; }
+  </style>
+</head>
+<body>
+  <section class="step hidden" data-step="welcome" aria-labelledby="welcomeTitle">
+    <div class="eyebrow">Screenpeek for Mac</div>
+    <h1 id="welcomeTitle">Welcome. Let’s get you set up.</h1>
+    <p class="muted">It’s the same Screenpeek, with one thing a browser can’t do.</p>
+    <ul class="list">
+      <li><span class="mark"><span class="laser" aria-hidden="true" style="margin:0"></span></span><span><strong>Lasers right on your screen.</strong> When you share, everyone’s pointers appear over whatever you’re showing, in any app. Only you see them there.</span></li>
+      <li><span class="mark">✓</span><span><strong>Nothing else changes.</strong> Rooms, codes, names and flips work just like on screenpeek.me.</span></li>
+      <li><span class="mark">✓</span><span><strong>Viewers don’t need the app.</strong> Anyone can still join from a browser.</span></li>
+    </ul>
+  </section>
+
+  <section class="step hidden" data-step="move" aria-labelledby="moveTitle">
+    <div class="eyebrow">Step 1</div>
+    <h1 id="moveTitle">Move Screenpeek to Applications</h1>
+    <p class="muted">Screenpeek is running from your Downloads or the disk image. macOS only remembers its screen recording permission once it lives in your Applications folder.</p>
+    <p id="moveFailed" class="muted hidden" role="alert" style="margin-top:16px;color:#923e2d">That didn’t work. In Finder, drag Screenpeek into Applications, then open it from there.</p>
+  </section>
+
+  <section class="step hidden" data-step="screen" aria-labelledby="screenTitle">
+    <div class="eyebrow" id="screenEyebrow">Step 2</div>
+    <h1 id="screenTitle">Allow screen recording</h1>
+    <p class="muted">Needed to share your screen. macOS asks once; if you only watch, you can skip this.</p>
+    <ol class="steps" id="screenSteps">
+      <li>Click <strong>Open System Settings</strong>.</li>
+      <li>Under <strong>Screen &amp; System Audio Recording</strong>, turn on <strong>Screenpeek</strong>. If macOS offers to quit and reopen it, that’s fine.</li>
+      <li>Come back here: this page notices, and you relaunch Screenpeek once.</li>
+    </ol>
+    <div class="status"><span id="accessBadge" class="badge" role="status">Checking…</span></div>
+  </section>
+
+  <section class="step hidden" data-step="done" aria-labelledby="doneTitle">
+    <div class="eyebrow">All set</div>
+    <h1 id="doneTitle">You’re ready to share.</h1>
+    <p class="muted">Start a screenpeek, turn on the laser pointer, and viewers’ lasers show up right on your screen. You can switch that off with <strong>On my screen</strong> any time.</p>
+  </section>
+
+  <div class="footer">
+    <div class="progress" id="progress" aria-hidden="true"></div>
+    <span class="spacer"></span>
+    <button id="skip" class="link" type="button">Skip for now</button>
+    <button id="secondary" class="secondary hidden" type="button"></button>
+    <button id="primary" class="primary" type="button"></button>
+  </div>
+  <script src="./setup.js"></script>
+</body>
+</html>

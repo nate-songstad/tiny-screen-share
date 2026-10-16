@@ -6,8 +6,16 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { autoStyles, isStyle } from './public/laser.js';
 
 const app = express();
+// The Mac app's disk image lives with the GitHub release; this keeps one link on the site.
+const macDownload = process.env.DESKTOP_DOWNLOAD_URL
+  || 'https://github.com/nate-songstad/tiny-screen-share/releases/latest/download/Screenpeek.dmg';
+app.get('/download/mac', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.redirect(302, macDownload);
+});
 // Keep the HTML, styles and client protocol in sync across deployments.
 app.use(express.static(fileURLToPath(new URL('./public', import.meta.url)), {
+  extensions: ['html'],
   setHeaders(res) { res.setHeader('Cache-Control', 'no-store'); }
 }));
 const server = http.createServer(app);
@@ -76,16 +84,17 @@ function relink(room, member) {
   else for (const item of room.members.values()) item.link++;
 }
 
-function cancelFlip(room, notice) {
+// `quiet` is someone who already has a more specific message of their own.
+function cancelFlip(room, notice, quiet) {
   if (!room.flip) return;
   clearTimeout(room.flip.timer);
   room.flip = null;
-  if (notice) for (const member of room.members.values()) send(member.ws, { type: 'notice', message: notice });
+  if (notice) for (const member of room.members.values()) if (member !== quiet) send(member.ws, { type: 'notice', message: notice });
 }
 
 // When nobody is left who could take the floor, the request is over.
-function settleFlip(room, notice) {
-  if (room.flip && !takers(room).length) cancelFlip(room, notice);
+function settleFlip(room, notice, quiet) {
+  if (room.flip && !takers(room).length) cancelFlip(room, notice, quiet);
 }
 
 function endRoom(room, message = 'This screenpeek has ended.') {
@@ -280,7 +289,7 @@ wss.on('connection', (ws) => {
         room.flip.passed.add(member.token);
         settleFlip(room, room.flip.passed.size > 1
           ? 'Everyone passed. The current sharer keeps the floor.'
-          : 'Flip declined. The current sharer keeps the floor.');
+          : 'Flip declined. The current sharer keeps the floor.', member);
         broadcast(room);
         break;
       case 'accept-flip':

@@ -6,11 +6,14 @@
   <meta name="theme-color" content="#f5f6f4" />
   <title>Screenpeek — just your screen</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='5' width='26' height='19' rx='5' fill='%23213932'/%3E%3Cpath d='M11 28h10' stroke='%23213932' stroke-width='3'/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="/style.css?v=5" />
+  <link rel="stylesheet" href="/style.css?v=6" />
 </head>
 <body>
   <header class="site-header">
-    <a class="brand" href="/" aria-label="Screenpeek home"><span class="brand-icon" aria-hidden="true"></span>screenpeek<span class="brand-period">.</span></a>
+    <div class="header-start">
+      <a class="brand" href="/" aria-label="Screenpeek home"><span class="brand-icon" aria-hidden="true"></span>screenpeek<span class="brand-period">.</span></a>
+      <a class="download-link" href="/download">Download Screenpeek Desktop <span class="platform-tag">Mac</span></a>
+    </div>
     <span class="privacy-note">No camera. No mic. Just your screen.</span>
   </header>
   <main>
@@ -81,6 +84,7 @@
         <div class="toolbar-actions">
           <button id="peopleBtn" class="secondary people-btn" type="button" aria-expanded="false" aria-controls="peoplePanel"><span class="people-icon" aria-hidden="true"></span><span id="peopleCount">1</span></button>
           <button id="laserBtn" class="secondary laser-btn hidden" aria-pressed="false"><span class="laser-dot" aria-hidden="true"></span><span id="laserLabel">Laser pointer</span></button>
+          <button id="onScreenBtn" class="secondary switch-btn hidden" type="button" aria-pressed="true" title="Draw viewers’ lasers right on your screen, over every app"><span class="switch" aria-hidden="true"></span>On my screen</button>
           <button id="pauseBtn" class="secondary">Pause</button>
           <button id="flipBtn" class="secondary" title="Offer the floor. Whoever accepts first shares next.">Flip <span aria-hidden="true">⇄</span></button>
           <button id="leaveBtn" class="danger">End screenpeek</button>
@@ -89,6 +93,6 @@
     </section>
     <p class="page-footer">A shared view. A simpler conversation.</p>
   </main>
-  <script type="module" src="/app.js?v=5"></script>
+  <script type="module" src="/app.js?v=6"></script>
 </body>
 </html>

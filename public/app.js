@@ -30,6 +30,16 @@ let laserResume = false;
 let pointerDown = false;
 let peopleOpen = false;
 let peopleKey = '';
+// Screenpeek for Mac adds a small API. In a browser this is null and nothing below changes.
+const desktop = window.screenpeekDesktop?.apiVersion === 1 ? window.screenpeekDesktop : null;
+document.documentElement.classList.toggle('is-desktop', Boolean(desktop));
+// What the current capture shows, as the desktop app reports it: { kind: 'screen' | 'window', displayId }.
+let surface = null, pendingSurface = null;
+// In the desktop app the laser draws right on the sharer's screen unless they turn that off.
+const onScreenKey = 'screenpeek.onScreenLaser';
+let onScreenPref = true;
+try { onScreenPref = localStorage.getItem(onScreenKey) !== 'off'; } catch { /* Storage blocked: keep the default. */ }
+let overlayKey = 'null';
 
 function visible(element, show) { element.classList.toggle('hidden', !show); }
 function notice(message = '', error = false) {
@@ -83,6 +93,7 @@ function cancelCapture() {
   captureJob = null;
   stopStream(pendingStream);
   pendingStream = null;
+  pendingSurface = null;
 }
 
 function goHome(message = '', error = false) {
@@ -107,6 +118,8 @@ function goHome(message = '', error = false) {
   laserWanted = null;
   laserResume = false;
   peopleOpen = false;
+  surface = null;
+  pendingSurface = null;
   closePip();
   persist();
   online = false;
@@ -121,6 +134,9 @@ function goHome(message = '', error = false) {
 }
 
 function laserOn() { return room?.role === 'sharer' && (laserWanted ?? room.laser) === true; }
+// The on-screen laser needs a whole screen: a shared window can move, and the overlay can't follow it.
+function onScreenReady() { return Boolean(desktop) && onScreenPref && surface?.kind === 'screen' && hasStream(); }
+function onScreenLaser() { return laserOn() && onScreenReady(); }
 function canPoint() {
   return room?.role === 'viewer' && room.laser && online && room.ready && room.sharerOnline
     && !room.paused && sharerLink()?.status === 'connected' && Boolean(ui.remoteVideo.srcObject);
@@ -151,13 +167,41 @@ function setLaser(on) {
   if (!send('laser', { on, id: laserRequest })) return;
   laserWanted = on;
   // Opening the floating window needs this click, so it happens before anything async.
-  if (on) openPip();
+  if (on && !onScreenReady()) openPip();
+  if (on && onScreenReady()) firstOnScreen();
+  else if (on && desktop && surface?.kind === 'window') {
+    notice('You’re sharing a window, so the laser shows in the preview in this window. Share your entire screen to see it right on your screen.');
+  }
   render();
 }
 
+function firstOnScreen() {
+  const key = 'screenpeek.onScreenExplained';
+  try {
+    if (localStorage.getItem(key)) return;
+    localStorage.setItem(key, '1');
+  } catch { return; }
+  notice('Lasers now appear right on your screen, over everything. Only you see them there; viewers see them on the video. Turn off On my screen to keep them in this window instead.');
+}
+
+function setOnScreen(on) {
+  onScreenPref = on;
+  try { localStorage.setItem(onScreenKey, on ? 'on' : 'off'); } catch { /* Kept for this session only. */ }
+  // Back to the floating window: open it with this click.
+  if (!on && laserOn()) openPip();
+  render();
+}
+
+// Forward every pointer change to the on-screen overlay while it's showing.
+board.mirror = (type, id, point) => {
+  if (overlayKey === 'null' || room?.role !== 'sharer') return;
+  desktop.laser(type === 'apply' ? { type, id, point, look: board.look(id) } : { type, id: id ?? null });
+};
+
 function openPip() {
   const job = ++pipJob;
-  const fallback = 'Your browser can’t float a window over other apps, so the laser shows in the preview on this tab. Chrome and Edge can float it.';
+  const fallback = desktop ? 'The laser shows in the preview in this window. Turn on On my screen to see it over every app.'
+    : 'Your browser can’t float a window over other apps, so the laser shows in the preview on this tab. Chrome and Edge can float it.';
   if (!window.documentPictureInPicture) { notice(fallback); return; }
   const { width: sourceWidth, height: sourceHeight } = stream?.getVideoTracks()[0]?.getSettings() || {};
   const aspect = sourceWidth && sourceHeight ? Math.min(Math.max(sourceWidth / sourceHeight, 0.6), 2.6) : 16 / 9;
@@ -237,7 +281,7 @@ function closePip() {
 
 function syncLaser() {
   const sharer = room?.role === 'sharer';
-  if (!laserOn()) closePip();
+  if (!laserOn() || onScreenLaser()) closePip();
   if (!room?.laser || sharer) laserMode = false;
   const pointing = laserMode && canPoint();
   if (!pointing) pointerDown = false;
@@ -251,6 +295,17 @@ function syncLaser() {
   if (!showing && board.traces.size) board.clear();
   for (const id of board.traces.keys()) if (!member(id)) board.clear(id);
   ui.laserCanvas.classList.toggle('pointing', pointing);
+  if (desktop) {
+    // Shown while pointing is live; hidden (and cleared) while paused or off.
+    const overlay = onScreenLaser() && !room.paused ? { displayId: surface.displayId } : null;
+    const key = JSON.stringify(overlay);
+    if (key !== overlayKey) {
+      overlayKey = key;
+      desktop.overlay(overlay);
+      // Catch the new overlay up with pointers already on the board.
+      if (overlay) for (const [id, trace] of board.traces) if (trace.cursor) desktop.laser({ type: 'apply', id, point: { ...trace.cursor, down: trace.down }, look: board.look(id) });
+    }
+  }
   const video = sharer ? ui.localVideo : ui.remoteVideo;
   if (stageView?.video !== video || !room) {
     stageView?.destroy();
@@ -472,12 +527,17 @@ function render() {
   ui.laserBtn.style.setProperty('--swatch', swatch(sharer ? 'red' : self()?.style));
   ui.laserBtn.disabled = sharer ? !online || !hasStream() || !room.ready : !canPoint();
   ui.laserLabel.textContent = sharer ? (laserActive ? 'Laser on' : 'Laser pointer') : (laserActive ? 'Pointing' : 'Laser');
+  visible(ui.onScreenBtn, Boolean(desktop) && sharer && laserActive && surface?.kind === 'screen');
+  ui.onScreenBtn.setAttribute('aria-pressed', String(onScreenPref));
+  ui.onScreenBtn.disabled = !online || !hasStream();
   ui.laserBtn.title = sharer
     ? (laserActive ? 'Turn off the laser pointer' : 'Let viewers point at your screen with a laser pointer')
     : (laserActive ? 'Stop pointing (Esc)' : 'Point at their screen. Click and drag to circle something.');
   const full = room.members.length >= 7;
   ui.sessionHint.textContent = sharer
     ? (room.members.length === 1 ? 'Invite up to six people with the code or link above.'
+      : laserActive && onScreenLaser() ? 'Viewers can point right on your screen. Only you see it there; they see it on the video.'
+      : laserActive && desktop ? 'Viewers can point at your screen. The preview here shows where.'
       : laserActive ? 'Viewers can point at your screen. The floating window shows where.'
         : full ? 'The room is full: seven people. Flip to give someone else the floor.'
           : 'Pause for privacy. Flip to give someone else the floor.')
@@ -844,13 +904,16 @@ async function onMessage(msg) {
     laserResume = false;
     if (room.role === 'sharer' && pendingStream) {
       stream = pendingStream;
+      surface = pendingSurface;
       pendingStream = null;
+      pendingSurface = null;
       captureJob = null;
       ui.localVideo.srcObject = stream;
     }
     if (room.role === 'viewer') {
       stopStream(stream);
       stream = null;
+      surface = null;
       ui.localVideo.srcObject = null;
       if (captureJob?.kind === 'flip' && captureJob.flipId !== room.flipId) cancelCapture();
     } else if (hasStream()) {
@@ -919,14 +982,21 @@ async function capture(kind) {
       return;
     }
     if (captured.getVideoTracks()[0]?.readyState !== 'live') throw new Error('The selected screen is no longer available.');
+    const picked = desktop ? await desktop.lastSource().catch(() => null) : null;
+    if (captureJob !== job || lifecycle !== job.lifecycle) {
+      stopStream(captured);
+      return;
+    }
     // Screens are mostly text: keep it sharp and let the frame rate give way first.
     for (const track of captured.getVideoTracks()) if ('contentHint' in track) track.contentHint = 'detail';
     watchStream(captured);
     if (kind === 'flip') {
       pendingStream = captured;
+      pendingSurface = picked;
       if (!send('accept-flip', { flipId: job.flipId })) throw new Error('The connection was lost.');
     } else {
       stream = captured;
+      surface = picked;
       ui.localVideo.srcObject = stream;
       if (kind === 'create') {
         busy = true;
@@ -988,6 +1058,7 @@ ui.laserBtn.addEventListener('click', () => {
     render();
   }
 });
+ui.onScreenBtn.addEventListener('click', () => setOnScreen(!onScreenPref));
 ui.laserBtn.addEventListener('animationend', () => ui.laserBtn.classList.remove('invite'));
 
 // Viewers who switch away stop costing the sharer anything, unless the video is

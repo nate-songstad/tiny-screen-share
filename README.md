@@ -54,7 +54,40 @@ The suite starts an isolated server on port 3217. Tests use separate browser ses
 
 Coverage includes servers that can't be reached or drop mid-session (video keeps playing and isn't restarted), automatic video retries and the in-place repair, the sharer's capture cap, codec and per-viewer budget, viewers who look away, a full room of seven plus a rejected eighth, joins/leaves/refreshes that don't interrupt others, racing flip acceptances, per-person passes, names (including markup and invisible characters), unique and fun laser styles, several people pointing at once, repeated handoffs, pause (including black received frames), refresh in either role, refresh during a handoff, reconnects, stale requests, stopped tracks, room expiry, malformed signaling, permission errors, clipboard fallback, keyboard joining, and layouts from 320px to 1440px. Screenshots and failure traces are saved under `test-results/`.
 
-The automation does not replace a real-device check of the macOS/Windows screen picker or a cross-network test. Before shipping, check desktop Chrome/Safari/Firefox on HTTPS with two devices, allow and deny OS recording permission, and verify tab/window/screen capture. Mobile viewing is supported; initiating screen capture depends on browser support.
+The desktop app has its own suite in `desktop/` (see Screenpeek for Mac). The automation does not replace a real-device check of the macOS/Windows screen picker or a cross-network test. Before shipping, check desktop Chrome/Safari/Firefox on HTTPS with two devices, allow and deny OS recording permission, and verify tab/window/screen capture. Mobile viewing is supported; initiating screen capture depends on browser support.
+
+## Screenpeek for Mac
+
+`desktop/` is an Electron app that loads https://screenpeek.me and adds what a browser can't do: when you share an **entire screen**, everyone's lasers are drawn right on that screen, over every app, in a click-through window that is hidden from the capture itself (so viewers never see a second copy). Sharing a single window falls back to the in-app preview, because the overlay can't follow a window that moves. Everything else is the same site.
+
+- **On by default, with a switch:** in the desktop app the laser shows on screen; **On my screen** in the toolbar turns that off (remembered). The site detects the app through a small, frozen `window.screenpeekDesktop` API and behaves exactly as before in browsers.
+- **Its own screen picker:** so the app knows which display you chose. Without screen recording permission, the picker explains how to turn it on instead of failing.
+- **First-launch setup:** welcome → move to Applications (if it's running from Downloads or the disk image) → screen recording permission, which it detects as you switch it on and then offers the relaunch macOS requires. Reopen it from **Screenpeek → Set Up Screen Sharing…**.
+- **Locked down:** the window only ever shows screenpeek.me; other links open in your browser and popups are refused. The site gets four functions and nothing else; camera and microphone are refused before macOS is even asked; the app's own pages are served from an allow-list with strict content security policies; no third-party code ships in the app.
+- **Offline:** a "Can't reach Screenpeek" page that retries every 10 seconds.
+
+```bash
+cd desktop
+npm install
+npm start            # runs against https://screenpeek.me
+SCREENPEEK_URL=http://localhost:3000/ npm start   # against a local server
+npm test             # drives the real app and browser viewers (windows open on screen)
+REAL_CAPTURE=1 npx playwright test real-capture   # proves the overlay is invisible to real screen capture
+npm run dist         # dist/Screenpeek.dmg: universal (Apple silicon + Intel), macOS 12+
+PACKAGED=1 npx playwright test packaged           # runs the built app from its disk image
+```
+
+Run the desktop tests from a normal terminal. Electron windows can't open inside a sandboxed shell, and VS Code's integrated terminal sets `ELECTRON_RUN_AS_NODE`, which the test launcher removes for you.
+
+**Releasing.** Deploy the site first (the app loads the live site), then attach `desktop/dist/Screenpeek.dmg` to a GitHub release, keeping that file name:
+
+```bash
+gh release create v1.0.0 desktop/dist/Screenpeek.dmg --title "Screenpeek for Mac 1.0.0"
+```
+
+The site's **Download Screenpeek Desktop** link (top left) goes to `/download`, which walks people through installing; its button goes to `/download/mac`, which redirects to the latest release's `Screenpeek.dmg`. Set `DESKTOP_DOWNLOAD_URL` on the server to send it elsewhere. Release files can only be downloaded publicly from a public repository.
+
+**Signing.** The app is ad-hoc signed, not registered with Apple: the first time, macOS blocks it and people choose **System Settings → Privacy & Security → Open Anyway** (the download page and the disk image both say so). With an Apple Developer ID, set `mac.identity` to it, `hardenedRuntime` to `true` and `notarize` to `true` in `desktop/package.json`, and it will open with no warning.
 
 ## Deploy
 
