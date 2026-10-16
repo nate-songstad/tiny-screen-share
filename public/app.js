@@ -2,7 +2,12 @@ import { LASER_STYLES, LaserBoard, LaserView, contentRect, encodePoint, parsePoi
 
 const ui = Object.fromEntries([...document.querySelectorAll('[id]')].map((el) => [el.id, el]));
 const storageKey = 'screenpeek.session.v3';
-const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+// Replaced by the server's settings when a session starts.
+let config = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }], linkTimeout: 15000, grace: 30000 };
+// On a shaky network a dropped video connection retries on its own, waiting a
+// little longer each time, before asking the viewer to retry.
+const healDelays = [1000, 3000, 6000];
+let healing = { attempts: 0, timer: null, sent: false };
 let socket, session, room, stream, pendingStream, captureJob;
 let online = false;
 let busy = false;
@@ -107,6 +112,7 @@ function goHome(message = '', error = false) {
   online = false;
   busy = false;
   reconnectStarted = 0;
+  resetHealing();
   const url = new URL(location.href);
   url.searchParams.delete('room');
   history.replaceState(null, '', url);
@@ -369,14 +375,17 @@ function render() {
   const sharer = room.role === 'sharer';
   ui.session.dataset.role = room.role;
   const watchers = sharer ? viewers() : [];
-  const watching = watchers.filter((person) => person.online);
+  // Watching includes anyone whose video still flows while their connection to us reconnects.
+  const watching = watchers.filter((person) => person.online || links.get(person.id)?.status === 'connected');
   const statuses = watching.map((person) => links.get(person.id)?.status || 'connecting');
   const connectedCount = statuses.filter((status) => status === 'connected').length;
   const peerStatus = sharer
     ? (connectedCount ? 'connected' : statuses.length && statuses.every((status) => status === 'failed') ? 'failed' : 'connecting')
     : sharerLink()?.status || 'idle';
   const connected = peerStatus === 'connected';
-  const live = online && room.ready && !room.paused && hasStream();
+  const live = room.ready && !room.paused && hasStream();
+  // Video that keeps playing through a dropped connection to the server.
+  const videoUp = sharer ? live : connected && room.ready && !room.paused && Boolean(ui.remoteVideo.srcObject);
   const sharerName = nameOf(sharerMember());
   ui.roleLabel.textContent = sharer ? 'You have the floor' : 'A shared view';
   ui.sessionTitle.textContent = sharer ? 'Sharing your screen' : `Watching ${sharerName}’s screen`;
@@ -393,6 +402,7 @@ function render() {
     status = 'Reconnecting…';
     title = 'Reconnecting to your screenpeek';
     description = 'Keep this tab open. We’ll bring you back automatically.';
+    overlay = !videoUp;
   } else if (sharer && (!hasStream() || !room.ready)) {
     status = 'Ready to resume';
     title = 'You’re still in the room';
@@ -401,6 +411,7 @@ function render() {
     status = 'Sharer reconnecting';
     title = 'The sharer is reconnecting';
     description = 'Your room is still open. Their screen will return when they reconnect.';
+    overlay = !videoUp;
   } else if (!sharer && !room.ready) {
     status = 'Waiting for screen';
     title = 'Waiting for their screen';
@@ -412,6 +423,14 @@ function render() {
   } else if (sharer && !watching.length) {
     status = watchers.length ? 'Viewer reconnecting' : 'Waiting for viewer';
     overlay = !live;
+  } else if (sharer && peerStatus === 'failed') {
+    // Viewers retry their own connections; the sharer keeps their preview.
+    status = 'Couldn’t connect'; tone = 'error';
+    overlay = !live;
+  } else if (!sharer && healingVideo()) {
+    status = 'Reconnecting video…';
+    title = 'Reconnecting the video';
+    description = 'The connection is unsteady. Trying again automatically.';
   } else if (peerStatus === 'failed') {
     status = 'Couldn’t connect'; tone = 'error';
     title = 'Let’s try that again';
@@ -438,7 +457,7 @@ function render() {
   visible(ui.resumeBtn, online && sharer && (!hasStream() || !room.ready));
   ui.resumeBtn.disabled = Boolean(captureJob);
   ui.resumeBtn.textContent = captureJob ? 'Choose your screen…' : 'Resume sharing';
-  visible(ui.retryBtn, online && room.ready && peerStatus === 'failed' && !room.paused && (sharer ? watching.length > 0 : room.sharerOnline));
+  visible(ui.retryBtn, online && !sharer && room.ready && peerStatus === 'failed' && !healingVideo() && !room.paused && room.sharerOnline);
   visible(ui.pauseBtn, sharer);
   ui.pauseBtn.textContent = room.paused ? 'Resume' : 'Pause';
   ui.pauseBtn.disabled = !online || !hasStream() || !room.ready;
@@ -503,14 +522,18 @@ function connect(action) {
   socket = ws;
   handshakeTimer = setTimeout(() => {
     if (socket === ws) ws.close();
-  }, 8000);
+  }, 10000);
   ws.addEventListener('open', () => {
     if (socket !== ws) return;
+    let message = action;
     if (action.type === 'resume') {
-      action = { ...action, hasStream: hasStream(), paused: Boolean(stream && !stream.getVideoTracks()[0].enabled), laser: laserOn() };
+      // Say whether our video connection survived, so the server doesn't restart it.
+      const keep = room?.role === 'sharer' ? [...links.values()].some((link) => link.status === 'connected')
+        : sharerLink()?.status === 'connected';
+      message = { ...action, hasStream: hasStream(), paused: Boolean(stream && !stream.getVideoTracks()[0].enabled), laser: laserOn(), keep };
       laserResume = true;
     }
-    ws.send(JSON.stringify(action));
+    ws.send(JSON.stringify(message));
   });
   ws.addEventListener('message', (event) => {
     messages = messages.then(async () => {
@@ -525,14 +548,23 @@ function connect(action) {
     if (socket !== ws) return;
     clearTimeout(handshakeTimer);
     online = false;
-    closeLinks();
+    // Video goes browser to browser, so it keeps playing while this reconnects.
     cancelCapture();
+    reconnectStarted ||= Date.now();
+    const elapsed = Date.now() - reconnectStarted;
     if (!session) {
-      goHome('Could not reach the sharing service. Please try again.', true);
+      // Starting or joining: a weak connection gets a few more tries before giving up.
+      if (elapsed >= 20000) {
+        goHome('Could not reach the sharing service. Check your connection and try again.', true);
+        return;
+      }
+      if (action.type === 'join') notice('Still trying to reach your screenpeek…');
+      render();
+      reconnectTimer = setTimeout(() => connect(action), Math.min(3000, 500 + elapsed / 4));
       return;
     }
-    reconnectStarted ||= Date.now();
-    if (Date.now() - reconnectStarted >= 20000) {
+    // Keep trying for as long as the server holds our place.
+    if (elapsed >= Math.max(20000, config.grace - 2000)) {
       goHome('Connection lost. Please join again or start a new screenpeek.', true);
       return;
     }
@@ -545,17 +577,62 @@ function linkFailed(link) {
   if (links.get(link.id) !== link) return;
   link.status = 'failed';
   clearTimeout(link.timer);
+  clearTimeout(link.disconnectTimer);
+  if (!link.sharing) healing.sent = false;
+  heal();
   render();
+}
+
+function resetHealing() {
+  clearTimeout(healing.timer);
+  healing = { attempts: 0, timer: null, sent: false };
+}
+// A viewer whose video connection failed asks for a fresh one, a few times.
+function heal() {
+  const link = sharerLink();
+  if (healing.timer || link?.status !== 'failed' || healing.attempts >= healDelays.length) return;
+  if (!online || !room.ready || !room.sharerOnline) return;
+  healing.timer = setTimeout(() => {
+    healing.timer = null;
+    if (sharerLink()?.status !== 'failed' || !online) return;
+    healing.attempts++;
+    healing.sent = true;
+    send('retry');
+    render();
+  }, healDelays[healing.attempts]);
+}
+// Retrying: waiting to retry, or a retry is under way. Once the last one fails, the viewer decides.
+function healingVideo() {
+  const status = sharerLink()?.status;
+  return Boolean(healing.timer) || (healing.attempts > 0 && status !== 'connected' && (status !== 'failed' || healing.sent));
+}
+
+// The network path broke but the connection is still there: find a new path
+// without restarting the video.
+async function restartIce(link) {
+  const { pc } = link;
+  if (!link.sharing || !online || link.restarting || pc.signalingState !== 'stable') return;
+  link.restarting = true;
+  try {
+    const description = await pc.createOffer({ iceRestart: true });
+    if (links.get(link.id) !== link) return;
+    await pc.setLocalDescription(description);
+    if (links.get(link.id) === link) signal(link, { description: pc.localDescription });
+  } catch (error) {
+    if (links.get(link.id) === link) console.warn('Could not restart a screen connection', error);
+  } finally {
+    link.restarting = false;
+  }
 }
 
 function openLink(id, epoch) {
   closeLink(id);
   const sharing = room.role === 'sharer';
-  const pc = new RTCPeerConnection(rtcConfig);
+  const pc = new RTCPeerConnection({ iceServers: config.iceServers });
   const link = { id, pc, epoch, sharing, status: 'connecting', candidates: [], channel: null };
   links.set(id, link);
   const current = () => links.get(id) === link;
-  link.timer = setTimeout(() => linkFailed(link), 15000);
+  link.timer = setTimeout(() => linkFailed(link), config.linkTimeout);
   pc.onicecandidate = ({ candidate }) => {
     if (candidate && current()) signal(link, { candidate });
   };
@@ -573,10 +650,13 @@ function openLink(id, epoch) {
       clearTimeout(link.timer);
       clearTimeout(link.disconnectTimer);
       link.status = 'connected';
+      if (!link.sharing) resetHealing();
     } else if (pc.connectionState === 'failed') linkFailed(link);
-    else if (pc.connectionState === 'disconnected') {
+    else if (pc.connectionState === 'disconnected' && link.status === 'connected') {
+      // Often a brief network blip: try a new path before giving up on it.
       link.status = 'connecting';
-      link.disconnectTimer = setTimeout(() => linkFailed(link), 5000);
+      restartIce(link);
+      link.disconnectTimer = setTimeout(() => linkFailed(link), 10000);
     }
     render();
   };
@@ -610,17 +690,65 @@ function watchChannel(link, channel) {
       board.clear(link.id);
       relay(link.id, { hide: true });
     } else board.clear();
+    // The other browser closed its end, so this connection is over.
+    linkFailed(link);
   });
+}
+
+// Hardware-friendly H.264 first when this browser has it; the viewer's browser
+// falls back to another codec if it can't play it.
+function preferH264(pc) {
+  const codecs = RTCRtpSender.getCapabilities?.('video')?.codecs;
+  if (!codecs) return;
+  const h264 = codecs.filter((codec) => codec.mimeType === 'video/H264' && /packetization-mode=1/.test(codec.sdpFmtpLine || ''));
+  if (!h264.length) return;
+  for (const transceiver of pc.getTransceivers()) {
+    if (transceiver.sender.track?.kind !== 'video' || !transceiver.setCodecPreferences) continue;
+    try {
+      transceiver.setCodecPreferences([...h264, ...codecs.filter((codec) => !h264.includes(codec))]);
+    } catch { /* Keep the browser's default order. */ }
+  }
+}
+
+// Each extra viewer is another encode and another upload, so share a budget:
+// a little less frame rate and bitrate each as the room fills up.
+function budget(count) {
+  if (count <= 1) return { maxBitrate: 2500000, maxFramerate: 20 };
+  if (count === 2) return { maxBitrate: 2000000, maxFramerate: 20 };
+  if (count <= 4) return { maxBitrate: 1500000, maxFramerate: 15 };
+  return { maxBitrate: 1200000, maxFramerate: 12 };
+}
+function tune() {
+  if (room?.role !== 'sharer') return;
+  const sharing = [...links.values()].filter((link) => link.sharing);
+  const limits = budget(sharing.filter((link) => !member(link.id)?.away).length);
+  for (const link of sharing) {
+    // Nobody's looking: send nothing until they are.
+    const wanted = { ...limits, active: !member(link.id)?.away };
+    const key = JSON.stringify(wanted);
+    if (link.tuned === key) continue;
+    const sender = link.pc.getSenders().find((item) => item.track?.kind === 'video');
+    const parameters = sender?.getParameters();
+    if (!parameters?.encodings?.length) continue;
+    link.tuned = key;
+    Object.assign(parameters.encodings[0], wanted);
+    sender.setParameters(parameters).catch(() => {
+      // Try again on the next update, e.g. if negotiation was still under way.
+      if (link.tuned === key) link.tuned = null;
+    });
+  }
 }
 
 async function offer(link) {
   try {
     for (const track of stream.getTracks()) link.pc.addTrack(track, stream);
+    preferH264(link.pc);
     watchChannel(link, link.pc.createDataChannel('laser', { ordered: true, maxRetransmits: 0 }));
     const description = await link.pc.createOffer();
     if (links.get(link.id) !== link) return;
     await link.pc.setLocalDescription(description);
     if (links.get(link.id) === link) signal(link, { description: link.pc.localDescription });
+    tune();
   } catch (error) {
     // A connection closed mid-offer was replaced on purpose; only a live one has failed.
     if (links.get(link.id) !== link) return;
@@ -634,10 +762,12 @@ async function offer(link) {
 // unchanged are left alone, so people joining or leaving don't interrupt others.
 async function reconcile() {
   const wanted = new Map();
+  // Someone reconnecting keeps a connection that's still working, but doesn't get a new one yet.
+  const working = (id) => links.get(id)?.status === 'connected';
   if (room && online && room.ready) {
     if (room.role === 'sharer') {
-      if (hasStream()) for (const person of viewers()) if (person.online) wanted.set(person.id, person.link);
-    } else if (room.sharerOnline && sharerMember()) wanted.set(sharerMember().id, room.epoch);
+      if (hasStream()) for (const person of viewers()) if (person.online || working(person.id)) wanted.set(person.id, person.link);
+    } else if (sharerMember() && (room.sharerOnline || working(sharerMember().id))) wanted.set(sharerMember().id, room.epoch);
   }
   const sharing = room?.role === 'sharer';
   for (const [id, link] of [...links]) {
@@ -649,15 +779,30 @@ async function reconcile() {
     const link = openLink(id, epoch);
     if (link.sharing) offers.push(offer(link));
   }
+  // Connections that dropped while we were offline get a new path now that we can signal.
+  for (const link of links.values()) if (link.sharing && link.pc.connectionState === 'disconnected') restartIce(link);
   await Promise.all(offers);
+  tune();
+  heal();
 }
 
+const sdpSession = (sdp) => /^o=\S+ (\d+)/m.exec(typeof sdp === 'string' ? sdp : '')?.[1];
+
 async function applySignal(link, data) {
-  const { pc } = link;
   const { description, candidate } = data;
-  const current = () => links.get(link.id) === link;
   if (description) {
     if ((!link.sharing && description.type !== 'offer') || (link.sharing && description.type !== 'answer')) return;
+    // An answer to an offer we've already moved past.
+    if (link.sharing && link.pc.signalingState !== 'have-local-offer') return;
+    // The sharer started a brand-new connection under the same generation
+    // (its old one was lost): start fresh rather than fail.
+    if (!link.sharing && link.pc.remoteDescription && sdpSession(link.pc.remoteDescription.sdp) !== sdpSession(description.sdp)) {
+      link = openLink(link.id, link.epoch);
+    }
+  }
+  const { pc } = link;
+  const current = () => links.get(link.id) === link;
+  if (description) {
     await pc.setRemoteDescription(description);
     if (!current()) return;
     for (const queued of link.candidates) await pc.addIceCandidate(queued);
@@ -677,6 +822,7 @@ async function applySignal(link, data) {
 
 async function onMessage(msg) {
   if (msg.type === 'session') {
+    if (msg.config && typeof msg.config === 'object') config = { ...config, ...msg.config };
     session = { code: msg.code, token: msg.token };
     persist();
     const url = new URL(location.href);
@@ -693,6 +839,8 @@ async function onMessage(msg) {
     room = msg;
     if (!previous) notice();
     if (laserResume || previous?.role !== room.role || room.laserId === laserRequest) laserWanted = null;
+    if (previous && previous.role !== room.role) resetHealing();
+    reportAway();
     laserResume = false;
     if (room.role === 'sharer' && pendingStream) {
       stream = pendingStream;
@@ -762,7 +910,8 @@ async function capture(kind) {
   try {
     // Keep this call directly in the click handler's task: capture requires user activation.
     captured = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: { ideal: 20, max: 30 } }, audio: false
+      // A Retina screen is ~5K; the sharer encodes once per viewer, so cap it near 1080p.
+      video: { frameRate: { ideal: 20, max: 30 }, width: { max: 1920 }, height: { max: 1080 } }, audio: false
     });
     if (captureJob !== job || lifecycle !== job.lifecycle || (kind !== 'create' && !online)
       || (kind === 'flip' && room?.flipId !== job.flipId)) {
@@ -770,6 +919,8 @@ async function capture(kind) {
       return;
     }
     if (captured.getVideoTracks()[0]?.readyState !== 'live') throw new Error('The selected screen is no longer available.');
+    // Screens are mostly text: keep it sharp and let the frame rate give way first.
+    for (const track of captured.getVideoTracks()) if ('contentHint' in track) track.contentHint = 'detail';
     watchStream(captured);
     if (kind === 'flip') {
       pendingStream = captured;
@@ -838,6 +989,16 @@ ui.laserBtn.addEventListener('click', () => {
   }
 });
 ui.laserBtn.addEventListener('animationend', () => ui.laserBtn.classList.remove('invite'));
+
+// Viewers who switch away stop costing the sharer anything, unless the video is
+// popped out into picture-in-picture where they can still see it.
+function reportAway() {
+  const away = document.visibilityState === 'hidden' && document.pictureInPictureElement !== ui.remoteVideo;
+  if (room?.role === 'viewer' && online && self() && self().away !== away) send('away', { away });
+}
+document.addEventListener('visibilitychange', reportAway);
+ui.remoteVideo.addEventListener('enterpictureinpicture', reportAway);
+ui.remoteVideo.addEventListener('leavepictureinpicture', reportAway);
 
 ui.peopleBtn.addEventListener('click', () => openPeople(!peopleOpen));
 ui.closePeopleBtn.addEventListener('click', () => {
@@ -914,6 +1075,7 @@ document.addEventListener('keydown', (event) => {
 
 ui.retryBtn.addEventListener('click', () => {
   notice();
+  resetHealing();
   for (const link of links.values()) link.status = 'connecting';
   render();
   send('retry');

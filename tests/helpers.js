@@ -7,7 +7,11 @@ export async function installCapture(page) {
     window.captureTest = { streams: [], mode: 'success', sockets: [], channels: [], peers: [] };
     const NativeSocket = window.WebSocket;
     window.WebSocket = class extends NativeSocket {
-      constructor(...args) { super(...args); window.captureTest.sockets.push(this); }
+      // With `offline` set, new sockets go to a closed port and fail like a dead network.
+      constructor(url, ...rest) {
+        super(window.captureTest.offline ? 'ws://127.0.0.1:9' : url, ...rest);
+        window.captureTest.sockets.push(this);
+      }
     };
     // Record laser data channels so tests can send raw or unauthorized messages.
     const NativePeer = window.RTCPeerConnection;
@@ -23,8 +27,9 @@ export async function installCapture(page) {
         return channel;
       }
     };
-    navigator.mediaDevices.getDisplayMedia = async () => {
+    navigator.mediaDevices.getDisplayMedia = async (constraints) => {
       const controls = window.captureTest;
+      controls.constraints = constraints;
       if (controls.mode === 'cancel') {
         controls.mode = 'success';
         throw new DOMException('Picker cancelled', 'NotAllowedError');

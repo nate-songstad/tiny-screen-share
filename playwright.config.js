@@ -15,7 +15,7 @@ export default defineConfig({
   webServer: {
     command: 'node server.js',
     url: 'http://127.0.0.1:3217',
-    env: { PORT: '3217', RECONNECT_GRACE_MS: '4000', FLIP_TIMEOUT_MS: '5000' },
+    env: { PORT: '3217', RECONNECT_GRACE_MS: '4000', FLIP_TIMEOUT_MS: '5000', LINK_TIMEOUT_MS: '5000' },
     reuseExistingServer: false
   }
 });

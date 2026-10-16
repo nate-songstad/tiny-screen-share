@@ -15,6 +15,12 @@ const wss = new WebSocketServer({ server, maxPayload: 64 * 1024 });
 const rooms = new Map();
 const reconnectGrace = Number(process.env.RECONNECT_GRACE_MS) || 30000;
 const flipTimeout = Number(process.env.FLIP_TIMEOUT_MS) || 60000;
+const linkTimeout = Number(process.env.LINK_TIMEOUT_MS) || 15000;
+// Video goes browser to browser. STUN finds a direct route; networks that block
+// one need a TURN relay, e.g. ICE_SERVERS='[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]'.
+const iceServers = process.env.ICE_SERVERS ? JSON.parse(process.env.ICE_SERVERS)
+  : [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
+if (!Array.isArray(iceServers)) throw new Error('ICE_SERVERS must be a JSON array of RTCIceServer objects.');
 // The sharer sends one video connection to each viewer.
 const maxPeople = 7;
 if (autoStyles.length < maxPeople) throw new Error('Every place needs its own laser colour.');
@@ -55,7 +61,7 @@ function snapshot(room, member) {
     laser: room.laser, laserId: room.laserId,
     members: [...room.members.values()].map((item) => ({
       id: item.id, name: item.name, style: item.style, role: isSharer(room, item) ? 'sharer' : 'viewer',
-      online: Boolean(item.ws), link: item.link
+      online: Boolean(item.ws), away: item.away, link: item.link
     }))
   };
 }
@@ -109,12 +115,13 @@ function addMember(room) {
   const members = [...room.members.values()];
   // There are as many solid colours as places, so one is always free.
   const style = autoStyles.find((id) => !members.some((item) => item.style === id));
-  const member = { token: randomUUID(), id: randomUUID(), name: null, style, link: 0, ws: null, timer: null };
+  const member = { token: randomUUID(), id: randomUUID(), name: null, style, away: false, link: 0, ws: null, timer: null };
   room.members.set(member.token, member);
   return member;
 }
 
-function attach(room, member, ws) {
+// `fresh` starts a new video connection; a reconnect whose video survived keeps it.
+function attach(room, member, ws, fresh = true) {
   clearTimeout(member.timer);
   const oldSocket = member.ws;
   member.ws = ws;
@@ -124,8 +131,9 @@ function attach(room, member, ws) {
     send(oldSocket, { type: 'ended', message: 'This session was opened in another tab.' });
     oldSocket.close();
   }
-  send(ws, { type: 'session', code: room.code, token: member.token, id: member.id });
-  relink(room, member);
+  send(ws, { type: 'session', code: room.code, token: member.token, id: member.id,
+    config: { iceServers, linkTimeout, grace: reconnectGrace } });
+  if (fresh) relink(room, member);
   broadcast(room);
 }
 
@@ -156,14 +164,18 @@ wss.on('connection', (ws) => {
       if (msg.type === 'resume') {
         const member = room.members.get(msg.token);
         if (!member) return error('Your session has expired. Join again or start a new screenpeek.', true);
+        // A dropped socket isn't a dropped video: if the client says its video
+        // connection is still up, it carries on without renegotiating.
+        let keep = msg.keep === true;
         if (isSharer(room, member)) {
           cancelFlip(room);
           room.ready = msg.hasStream === true;
           room.paused = room.ready && msg.paused === true;
           // The floating laser window survives a dropped socket, but not a refresh.
           room.laser = room.ready && msg.laser === true;
+          keep &&= room.ready;
         }
-        attach(room, member, ws);
+        attach(room, member, ws, !keep);
       } else {
         if (!/^\d{6}$/.test(String(msg.code))) return error('Enter a six-digit code.', true);
         if (room.members.size >= maxPeople) return error(`This screenpeek is full. Up to ${maxPeople} people can join.`, true);
@@ -198,6 +210,12 @@ wss.on('connection', (ws) => {
         broadcast(room);
         break;
       }
+      case 'away':
+        // A viewer who isn't looking; the sharer stops sending them video until they're back.
+        if (typeof msg.away !== 'boolean' || msg.away === member.away) return;
+        member.away = msg.away;
+        broadcast(room);
+        break;
       case 'style':
         // No two people share a laser, so nobody mistakes someone else's pointer for their own.
         if (!isStyle(msg.style) || msg.style === member.style) return;
@@ -272,6 +290,7 @@ wss.on('connection', (ws) => {
         }
         cancelFlip(room);
         room.sharer = member.token;
+        member.away = false;
         room.ready = true;
         room.paused = false;
         room.laser = false;
@@ -297,11 +316,9 @@ wss.on('connection', (ws) => {
     const member = room?.members.get(ws.meta?.token);
     if (!room || member?.ws !== ws) return;
     member.ws = null;
-    if (isSharer(room, member)) {
-      cancelFlip(room);
-      room.ready = false;
-    } else settleFlip(room);
-    relink(room, member);
+    // Video keeps flowing browser to browser while the socket reconnects.
+    if (isSharer(room, member)) cancelFlip(room);
+    else settleFlip(room);
     broadcast(room);
     member.timer = setTimeout(() => removeMember(room, member), reconnectGrace);
   });

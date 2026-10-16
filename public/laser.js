@@ -154,6 +154,15 @@ export class LaserBoard {
   }
 
   busy() { return [...this.traces.values()].some((trace) => trace.busy()); }
+
+  // Whether the next frame differs from this one: a still, solid-colour orb needs no redraws.
+  animating() {
+    for (const [id, trace] of this.traces) {
+      if (trace.points.length || trace.pulses.length) return true;
+      if (trace.cursor && byId.get(this.look(id).style)?.fun) return true;
+    }
+    return false;
+  }
 }
 
 const rgba = ([r, g, b], alpha) => `rgba(${r}, ${g}, ${b}, ${alpha})`;
@@ -277,6 +286,11 @@ export class LaserView {
     this.frame = 0;
     this.listener = () => this.wake();
     board.listeners.add(this.listener);
+    // Frames only run while something moves, so repaint when the size changes too.
+    const win = canvas.ownerDocument.defaultView;
+    this.observer = win?.ResizeObserver ? new win.ResizeObserver(this.listener) : null;
+    this.observer?.observe(canvas);
+    video.addEventListener('resize', this.listener);
   }
 
   wake() {
@@ -300,11 +314,13 @@ export class LaserView {
     ctx.clearRect(0, 0, width, height);
     const rect = contentRect(video, width, height);
     if (rect) for (const [id, trace] of board.traces) draw(ctx, trace, board.look(id), rect, ratio * this.size, now);
-    if (board.busy()) this.wake();
+    if (board.animating()) this.wake();
   }
 
   destroy() {
     this.board.listeners.delete(this.listener);
+    this.observer?.disconnect();
+    this.video.removeEventListener('resize', this.listener);
     const win = this.canvas?.ownerDocument.defaultView;
     if (this.frame) win?.cancelAnimationFrame(this.frame);
     this.canvas?.getContext('2d').clearRect(0, 0, this.canvas.width, this.canvas.height);

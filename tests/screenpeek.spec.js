@@ -272,12 +272,39 @@ test('join by keyboard, copy link, permission errors and an unavailable service 
   await viewer.getByLabel('Six-digit share code').press('Enter');
   await live(host, viewer);
   await host.locator('#leaveBtn').click();
+  // An unreachable service is retried quietly for a while before giving up.
   await host.routeWebSocket('**/*', (ws) => ws.close());
   await host.reload();
   await host.locator('#startBtn').click();
-  await expect(host.locator('#message')).toContainText('Could not reach');
+  await expect(host.locator('#startBtn')).toHaveText('Connecting…');
+  await host.waitForTimeout(3000);
+  await expect(host.locator('#message')).toBeHidden();
+  await expect(host.locator('#message')).toContainText('Could not reach', { timeout: 30000 });
   await tracksStopped(host);
   await expect(host.locator('#startBtn')).toBeEnabled();
+  expect(errors).toEqual([]);
+});
+
+test('a flaky connection to the service still starts and joins a screenpeek', async ({ browser }) => {
+  test.setTimeout(60000);
+  const errors = [];
+  const host = await newPage(browser, errors);
+  const viewer = await newPage(browser, errors);
+  // The first two attempts fail, as they might on a poor network.
+  for (const page of [host, viewer]) {
+    let refused = 0;
+    await page.routeWebSocket('**/*', (route) => {
+      if (refused++ < 2) route.close();
+      else route.connectToServer();
+    });
+  }
+  await host.goto('/');
+  await host.locator('#startBtn').click();
+  await expect(host.locator('#roomCode')).toHaveText(/^\d{6}$/);
+  await viewer.goto('/?room=' + await host.locator('#roomCode').textContent());
+  await expect(viewer.locator('#message')).toContainText('Still trying');
+  await live(host, viewer);
+  await expect(viewer.locator('#message')).toBeHidden();
   expect(errors).toEqual([]);
 });
 
@@ -304,7 +331,8 @@ test.describe('browser capture API', () => {
   });
 });
 
-test('failed video negotiation times out visibly and Retry connection restores real video', async ({ browser }) => {
+test('failed video retries on its own, then times out visibly, and Retry connection restores real video', async ({ browser }) => {
+  test.setTimeout(90000);
   const errors = [];
   const host = await newPage(browser, errors);
   const viewer = await newPage(browser, errors);
@@ -319,10 +347,41 @@ test('failed video negotiation times out visibly and Retry connection restores r
   await host.locator('#startBtn').click();
   await expect(host.locator('#roomCode')).toHaveText(/^\d{6}$/);
   await viewer.goto('/?room=' + await host.locator('#roomCode').textContent());
-  await expect(viewer.locator('#stageTitle')).toHaveText('Let’s try that again', { timeout: 20000 });
+  // While it retries automatically, it says so rather than showing an error.
+  await expect(viewer.locator('#sessionStatus')).toHaveText('Reconnecting video…', { timeout: 15000 });
+  await expect(viewer.locator('#stageTitle')).toHaveText('Reconnecting the video');
+  await expect(viewer.locator('#retryBtn')).toBeHidden();
+  // Once retries run out, it asks the viewer.
+  await expect(viewer.locator('#stageTitle')).toHaveText('Let’s try that again', { timeout: 40000 });
   await expect(viewer.locator('#retryBtn')).toBeVisible();
+  const attempts = await viewer.evaluate(() => window.captureTest.peers.length);
+  expect(attempts).toBe(4);
+  // The sharer keeps its own preview throughout.
+  await expect(host.locator('#localVideo')).toBeVisible();
   allowSignals = true;
   await viewer.locator('#retryBtn').click();
   await live(host, viewer);
+  expect(errors).toEqual([]);
+});
+
+test('video that fails briefly recovers by itself, without pressing Retry', async ({ browser }) => {
+  const errors = [];
+  const host = await newPage(browser, errors);
+  const viewer = await newPage(browser, errors);
+  let allowSignals = false;
+  await viewer.routeWebSocket('**/*', (route) => {
+    const server = route.connectToServer();
+    server.onMessage((message) => {
+      if (allowSignals || JSON.parse(String(message)).type !== 'signal') route.send(message);
+    });
+  });
+  await host.goto('/');
+  await host.locator('#startBtn').click();
+  await expect(host.locator('#roomCode')).toHaveText(/^\d{6}$/);
+  await viewer.goto('/?room=' + await host.locator('#roomCode').textContent());
+  await expect(viewer.locator('#sessionStatus')).toHaveText('Reconnecting video…', { timeout: 15000 });
+  allowSignals = true;
+  await live(host, viewer);
+  await expect(viewer.locator('#retryBtn')).toBeHidden();
   expect(errors).toEqual([]);
 });
